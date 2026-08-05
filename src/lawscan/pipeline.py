@@ -97,7 +97,8 @@ def _saved(here: Path, question: str) -> dict | None:
 
 def one(path: Path, client: Client | None, workdir: Path, *, no_ocr: bool = False,
         only: tuple[str, ...] | None = None, reuse: bool = False,
-        borrow: Path | None = None, text_from: Path | None = None) -> Row:
+        borrow: Path | None = None, text_from: Path | None = None,
+        audience: str = "split") -> Row:
     """PDF in, one row out, with everything it took written down.
 
     ``text_from`` is a folder of text ``lawscan ocr`` already extracted. The
@@ -177,7 +178,7 @@ def one(path: Path, client: Client | None, workdir: Path, *, no_ocr: bool = Fals
             value["core"], value["support"] = categories.correct(
                 document.text(), value.get("core") or [], value.get("support") or []
             )
-        _apply(row, question.name, value)
+        _apply(row, question.name, value, audience=audience)
 
     # The law type only arrives with the first answer, and one rule reads
     # differently once it knows a document is a judgment rather than a law.
@@ -233,7 +234,8 @@ _FIELDS: dict[str, dict[str, str]] = {
         "province": "จังหวัด",
         "districts": "อำเภอ",
     },
-    "audience": {"audience": "กลุ่มเป้าหมาย"},
+    # audience is applied by hand below: the answer holds two ways of writing
+    # the same reading and only one of them goes in the column.
     "business": {
         "core": "กฎหมายเฉพาะธุรกิจ (Core Business Laws)",
         "support": "กฎหมายสนับสนุนและกฎหมายทั่วไปที่ต้องปฏิบัติตาม (Support & General Compliance)",
@@ -254,7 +256,15 @@ _FIELDS: dict[str, dict[str, str]] = {
 }
 
 
-def _apply(row: Row, question: str, value: dict) -> None:
+#: Which way of writing the audience reaches the CSV. ``split`` is the
+#: operator's stated preference — one group per item, no "และ" joining two
+#: groups into something that reads as one. ``merged`` is how their reference
+#: file writes 14 of its 40, and is kept so the two can be scored against each
+#: other rather than argued about.
+AUDIENCE_STYLES = ("split", "merged")
+
+
+def _apply(row: Row, question: str, value: dict, *, audience: str = "split") -> None:
     if question == "parent":
         # One line per section cited, which is how the expected file writes it:
         # "พ.ร.บ.ผู้ตรวจการแผ่นดิน พ.ศ. 2560 มาตรา 24, ... มาตรา 42".
@@ -264,6 +274,12 @@ def _apply(row: Row, question: str, value: dict) -> None:
             if p.get("law")
         ]
         row.put("กฎหมายแม่", parents, f"llm:{question}")
+        return
+    if question == "audience":
+        # Both are in the answer file either way, so changing this and
+        # rebuilding with --reuse costs nothing.
+        chosen = value.get(audience) or value.get("split") or value.get("merged")
+        row.put("กลุ่มเป้าหมาย", chosen, f"llm:audience[{audience}]")
         return
     for field, column in _FIELDS.get(question, {}).items():
         if field in value:
@@ -285,7 +301,7 @@ def new_run(root: Path, stamp: str) -> tuple[Path, Path]:
 def scan(paths: list[Path], *, out: Path, workdir: Path, no_ocr: bool = False,
          only: str | None = None, no_llm: bool = False, reuse: bool = False,
          skip_done: list[Path] | None = None, text_from: Path | None = None,
-         batch: int = 1) -> int:
+         batch: int = 1, audience: str = "split") -> int:
     """Every document to one CSV."""
     if not no_llm and not key_is_available():
         log.error(
@@ -318,7 +334,8 @@ def scan(paths: list[Path], *, out: Path, workdir: Path, no_ocr: bool = False,
                           f"ยืมคำตอบจาก {borrow.parts[-3]}" if borrow else "")
         try:
             return one(path, client, workdir, no_ocr=no_ocr, only=wanted,
-                       reuse=reuse, borrow=borrow, text_from=text_from)
+                       reuse=reuse, borrow=borrow, text_from=text_from,
+                       audience=audience)
         except Exception as exc:  # noqa: BLE001 — one bad file is not a bad run
             log.error("%s ล้ม: %s: %s", path.name, type(exc).__name__, exc)
             return None

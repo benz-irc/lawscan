@@ -70,18 +70,24 @@ PARENT = Question(
 AUDIENCE = Question(
     name="audience",
     fills=("กลุ่มเป้าหมาย",),
-    # A list, not a sentence, and no second field to put an answer in.
+    # Both ways of writing the same reading, in one answer.
     #
-    # Both halves of that were bugs. Asked for a string, the model wrote two
-    # groups joined by "และ" — one cell that reads as a single group meeting
-    # both conditions, when it is two groups meeting one each. And a ``roles``
-    # field, described as supporting detail and filling no column at all, was
-    # where a correctly identified third group went to be dropped: document
-    # 100014's นิติบุคคลที่ประสงค์จะจัดการฝึกอบรม was found, listed under
-    # roles, and never reached the CSV.
+    # ``merged`` joins closely-related groups with "และ", which is how the
+    # reference file writes 14 of its 40. ``split`` gives one group per item,
+    # which is what the operator asked for: "และ" reads as a single group
+    # meeting both conditions when it is two groups meeting one each, and a
+    # person opening the file cannot tell which one is theirs.
     #
-    # One group per item, one place to put them.
-    schema=_obj({"audience": _STRINGS}, ["audience"]),
+    # Asking for both costs a few dozen output tokens and settles the question
+    # with a measurement instead of a preference. Which one reaches the CSV is
+    # chosen at run time; the other stays in the answer file, so switching is
+    # a rebuild from saved answers and not another hour of model calls.
+    #
+    # There is deliberately no third field. A ``roles`` field once sat here,
+    # described as supporting detail and filling no column, and it was where a
+    # correctly identified group went to be dropped — document 100014 bound
+    # three, the model found three, two reached the CSV.
+    schema=_obj({"merged": _STRING, "split": _STRINGS}, ["merged", "split"]),
 )
 
 #: Which businesses must know it. The expensive one — it carries the taxonomy.

@@ -46,6 +46,7 @@ def run(
     fresh: bool = False,
     text: Path | None = None,
     batch: int = 1,
+    audience: str = "split",
     stamp: str | None = None,
 ) -> int:
     """Every PDF under ``pdfs`` to a kept run under ``into``.
@@ -86,6 +87,7 @@ def run(
         skip_done=None if fresh else [into],
         text_from=text,
         batch=batch,
+        audience=audience,
     )
     if code != 0:
         return code
@@ -99,7 +101,7 @@ def run(
         log.info("── ขั้นที่ 3  เทียบกับ %s ──", expected)
         compare_dir = into / f"compare40-{stamp}"
         print()
-        print(testrun.write(out, expected, out.parent, compare_dir))
+        print(testrun.write(out, expected, out.parent, compare_dir, workdir=workdir))
         made.append(compare_dir)
         steps = [("เปิดผลลัพธ์", f"open {out}"), ("ดูที่ไม่ตรง", f"open {compare_dir}/cells.csv")]
     else:

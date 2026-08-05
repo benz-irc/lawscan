@@ -43,7 +43,7 @@ def _ocr(args: argparse.Namespace) -> int:
     from lawscan.ocr.read import extract
 
     files = _pdfs(args.path)
-    written = extract(files, args.into, ocr=not args.no_ocr)
+    written = extract(files, args.into, ocr=not args.no_ocr, mode=args.mode)
     if not written:
         return 2
 
@@ -161,6 +161,7 @@ def _scan(args: argparse.Namespace) -> int:
         skip_done=args.skip_done,
         text_from=args.text,
         batch=args.batch,
+        audience=args.audience,
     )
     if code == 0:
         print(report(
@@ -213,7 +214,8 @@ def _record(args: argparse.Namespace) -> int:
     compare_dir = args.tests / f"compare40-{stamp}"
     from lawscan.where import report
 
-    print(testrun.write(args.ours, args.expected, result_dir, compare_dir, note=args.note))
+    print(testrun.write(args.ours, args.expected, result_dir, compare_dir,
+                        note=args.note, workdir=args.workdir))
     print(report(
         "เก็บผลรอบนี้แล้ว",
         [result_dir, compare_dir],
@@ -234,6 +236,7 @@ def _etl(args: argparse.Namespace) -> int:
         fresh=args.fresh,
         text=args.text,
         batch=args.batch,
+        audience=args.audience,
     )
 
 
@@ -274,6 +277,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="ที่เก็บข้อความ แปลงให้เองถ้ายังไม่มี (ค่าเริ่มต้น text)")
     p_etl.add_argument("--no-text-cache", dest="text", action="store_const", const=None,
                        help="อ่าน PDF ใหม่ทุกครั้ง ไม่ใช้ข้อความที่เก็บไว้")
+    p_etl.add_argument("--audience", choices=("split", "merged"), default="split",
+                       help="กลุ่มเป้าหมายลง CSV แบบไหน (ค่าเริ่มต้น split)")
     p_etl.add_argument("--batch", type=int, default=1, metavar="N",
                        help="ทำพร้อมกันครั้งละ N ฉบับ (ค่าเริ่มต้น 1)")
     p_etl.add_argument("--no-ocr", action="store_true")
@@ -283,6 +288,9 @@ def main(argv: list[str] | None = None) -> int:
     common(p_ocr)
     p_ocr.add_argument("--into", type=Path, default=Path("text"),
                        help="ที่เก็บข้อความ (ค่าเริ่มต้น text)")
+    p_ocr.add_argument("--mode", choices=("text", "image"), default="text",
+                       help="text = เฉพาะหน้าที่ไม่มีชั้นข้อความ · "
+                            "image = อ่านภาพในหน้าด้วย (ช้ากว่า ได้แผนที่ แบบฟอร์ม)")
     p_ocr.set_defaults(run=_ocr)
 
     p_read = sub.add_parser("read", help="ดูข้อความที่ OCR อ่านได้")
@@ -310,6 +318,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="กฎอย่างเดียว ไม่เรียกโมเดล ไม่เสียเงิน")
     p_scan.add_argument("--reuse", action="store_true",
                         help="ใช้คำตอบโมเดลที่บันทึกไว้แล้ว รันเฉพาะกฎใหม่")
+    p_scan.add_argument("--audience", choices=("split", "merged"), default="split",
+                       help="กลุ่มเป้าหมายลง CSV แบบไหน (ค่าเริ่มต้น split)")
     p_scan.add_argument("--batch", type=int, default=1, metavar="N",
                         help="ทำพร้อมกันครั้งละ N ฉบับ")
     p_scan.add_argument("--text", type=Path, metavar="DIR",
@@ -331,6 +341,8 @@ def main(argv: list[str] | None = None) -> int:
     p_rec.add_argument("ours", type=Path, nargs="?", default=Path("out/result.csv"))
     p_rec.add_argument("--expected", type=Path, default=Path("data/expected.csv"))
     p_rec.add_argument("--tests", type=Path, default=Path("tests"))
+    p_rec.add_argument("--workdir", type=Path,
+                       help="โฟลเดอร์ documents/ ของรอบนั้น สำหรับคิดค่าใช้จ่าย")
     p_rec.add_argument("--stamp", help="ใช้เวลานี้แทนเวลาปัจจุบัน เช่น 20260805-1338")
     p_rec.add_argument("--note", default="", help="บันทึกว่ารันนี้ต่างจากรอบก่อนตรงไหน")
     p_rec.set_defaults(run=_record)

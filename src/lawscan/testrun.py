@@ -16,6 +16,7 @@ import csv
 import shutil
 from pathlib import Path
 
+from lawscan import usage
 from lawscan.diff import compare, report, write_comparison
 
 csv.field_size_limit(10**8)
@@ -37,7 +38,8 @@ def _column_table(result) -> list[list[str]]:
 
 
 def write(
-    ours: Path, expected: Path, result_dir: Path, compare_dir: Path, *, note: str = ""
+    ours: Path, expected: Path, result_dir: Path, compare_dir: Path, *,
+    note: str = "", workdir: Path | None = None,
 ) -> str:
     """Both folders, filled. Returns the summary text for printing."""
     result_dir.mkdir(parents=True, exist_ok=True)
@@ -67,7 +69,20 @@ def write(
             share = f"{credit / (2 * scored):.0%}" if scored else "—"
             writer.writerow([document, scored, f"{credit / 2:g}", share])
 
-    text = f"{summary}\n\n{cells:,} ช่องที่ไม่ตรง อยู่ใน cells.csv\n"
+    # What it cost, every time. A score without a price is half the decision,
+    # and the numbers are already on disk in the answer files — nothing has to
+    # be measured while the run is happening.
+    spend = usage.read(workdir or result_dir / "documents")
+    with (compare_dir / "usage.csv").open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["เอกสาร", "input token", "output token"])
+        for document, tokens_in, tokens_out in sorted(spend.per_document):
+            writer.writerow([document, tokens_in, tokens_out])
+
+    text = (
+        f"{summary}\n\n{cells:,} ช่องที่ไม่ตรง อยู่ใน cells.csv\n"
+        f"\n{'─' * 64}\n{usage.report(spend)}\n"
+    )
     (compare_dir / "summary.txt").write_text(text, encoding="utf-8")
     (result_dir / "summary.txt").write_text(text, encoding="utf-8")
     return text

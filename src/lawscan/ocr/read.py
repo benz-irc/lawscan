@@ -42,6 +42,23 @@ _RUNNING_HEADER = re.compile(
 #: written inside it.
 _MEANINGFUL_IMAGE = 40_000
 
+#: The two ways to read a document.
+#:
+#: ``text`` recognises only pages that have no text layer at all. It is the
+#: cheap one and it is right for the ordinary Gazette PDF, where every page is
+#: real text and recognising it again would be slower and worse.
+#:
+#: ``image`` also reads the pictures. A map annexe, a government form, a
+#: diagram with its dimensions written inside it — these are pages whose
+#: content is drawn rather than typed, and the text route returns nothing for
+#: them however carefully it looks. Measured over 91 documents: 53 carry
+#: pictures and 18 pages are content that ``text`` cannot see at all.
+#:
+#: The recognised text is *appended* rather than substituted, because those
+#: pages usually do have a heading in real text above the picture, and
+#: replacing it would trade one loss for another.
+MODES = ("text", "image")
+
 #: How little text makes a page "a picture with a caption" rather than "a page".
 #: Set from what the corpus actually contains: the uniform-regulation pages
 #: carry 120–160 characters of heading above a full-page illustration, and a
@@ -141,7 +158,7 @@ def load(record: Path) -> Document:
     )
 
 
-def extract(paths: list[Path], into: Path, *, ocr: bool = True) -> int:
+def extract(paths: list[Path], into: Path, *, ocr: bool = True, mode: str = "text") -> int:
     """Every PDF to saved text. The one expensive step, done once.
 
     Rendering a page at 300 dpi and recognising it takes seconds; reading the
@@ -152,26 +169,31 @@ def extract(paths: list[Path], into: Path, *, ocr: bool = True) -> int:
     for position, path in enumerate(paths, start=1):
         progress.document(position, len(paths), path.name)
         try:
-            document = read(path, ocr=ocr)
+            document = read(path, ocr=ocr, mode=mode)
         except Exception as exc:  # noqa: BLE001 — one bad file is not a bad run
             log.error("%s ล้ม: %s: %s", path.name, type(exc).__name__, exc)
             continue
         record = document.save(into)
         written += 1
         lost = document.unread_pages
-        layer = sum(1 for p in document.pages if p.source == "text-layer")
+        layer = sum(1 for p in document.pages if p.source.startswith("text-layer"))
+        added = sum(1 for p in document.pages if p.source == "text-layer+ocr")
         progress.step(
             "อ่าน", "pymupdf",
             f"{len(document.pages)} หน้า · text-layer {layer} · ocr {document.scanned_pages}"
-            f" · {len(document.text()):,} ตัวอักษร"
+            + (f" · อ่านภาพเพิ่ม {added}" if added else "")
+            + f" · {len(document.text()):,} ตัวอักษร"
             + (f" · ⚠ {len(lost)} หน้าเป็นภาพ (หน้า {', '.join(map(str, lost))})" if lost else ""),
         )
         progress.step("เก็บ", "แฟ้มข้อความ", f"{record.parent}/{record.stem}.txt + .json")
     return written
 
 
-def read(path: Path, *, ocr: bool = True) -> Document:
-    """Every page of a PDF as repaired Thai text."""
+def read(path: Path, *, ocr: bool = True, mode: str = "text") -> Document:
+    """Every page of a PDF as repaired Thai text.
+
+    ``mode`` is ``text`` or ``image``; see ``MODES``.
+    """
     import fitz  # imported here so `lawscan --help` works without PyMuPDF
 
     pages: list[Page] = []
@@ -179,10 +201,19 @@ def read(path: Path, *, ocr: bool = True) -> Document:
         for index, page in enumerate(pdf, start=1):
             raw = page.get_text() or ""
             source = "text-layer"
+            pictured = _has_picture(page)
+
             if len(raw.strip()) < _TEXT_LAYER_MIN and ocr:
                 raw = _recognise(page)
                 source = "ocr"
-            pages.append(Page(index, raw, source, has_image=_has_picture(page)))
+            elif ocr and mode == "image" and pictured:
+                # Only the pictures, and only what is inside them.
+                drawn = _recognise_pictures(page).strip()
+                if drawn:
+                    raw = f"{raw}\n{drawn}"
+                    source = "text-layer+ocr"
+
+            pages.append(Page(index, raw, source, has_image=pictured))
 
     # The header is stripped after every page is read, not during, because
     # "keep the first one" means the first one in the document — and the first
@@ -213,7 +244,36 @@ def _has_picture(page: object) -> bool:
     return any(image[2] * image[3] >= _MEANINGFUL_IMAGE for image in images)
 
 
-def _recognise(page: object) -> str:
+def _recognise_pictures(page: object) -> str:
+    """Read what is drawn inside the pictures, and nothing else.
+
+    Clipped to each picture's own rectangle rather than run over the page.
+    Recognising the whole page re-read the text that was already there and
+    returned it worse: on one document it added a second Gazette header saying
+    "เล่ม oma ตอนที 12 ก … 25203" beside the real "เล่ม ๑๓๗ … ๒๕๖๓", which the
+    header rule would have been entitled to believe. A repair that invents a
+    publication date is worse than the gap it fills.
+    """
+    found: list[str] = []
+    try:
+        images = page.get_images(full=True)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        return ""
+
+    for image in images:
+        if image[2] * image[3] < _MEANINGFUL_IMAGE:
+            continue
+        try:
+            for rect in page.get_image_rects(image[0]):  # type: ignore[attr-defined]
+                text = _recognise(page, clip=rect).strip()
+                if text:
+                    found.append(text)
+        except Exception as exc:  # noqa: BLE001 — one bad picture is not a bad page
+            log.debug("อ่านภาพไม่สำเร็จ: %s", type(exc).__name__)
+    return "\n".join(found)
+
+
+def _recognise(page: object, *, clip: object = None) -> str:
     """Recognise one page, or return nothing if the tools are not installed.
 
     A missing Tesseract is a fact about the machine, not an error in the
@@ -232,7 +292,7 @@ def _recognise(page: object) -> str:
     try:
         # 300 dpi. Thai tone marks sit above the line and are the first thing
         # lost at a lower resolution.
-        pixmap = page.get_pixmap(dpi=300)  # type: ignore[attr-defined]
+        pixmap = page.get_pixmap(dpi=300, clip=clip)  # type: ignore[attr-defined]
         image = Image.open(io.BytesIO(pixmap.tobytes("png")))
         return pytesseract.image_to_string(image, lang="tha+eng")
     except Exception as exc:  # noqa: BLE001 — one bad page is not a bad document
