@@ -40,8 +40,12 @@ class Question:
     fills: tuple[str, ...]
     #: JSON Schema the answer must match.
     schema: dict[str, Any]
-    #: How much of the document to send. Some questions only need the opening.
+    #: How much of the document's opening to send. None sends all of it.
     chars: int | None = None
+    #: How much of its ending to send as well. A Thai instrument states its
+    #: commencement, its signature and its stated reason at the end, and a
+    #: budget that keeps only the opening loses all three on a long document.
+    tail_chars: int = 0
 
     @property
     def path(self) -> Path:

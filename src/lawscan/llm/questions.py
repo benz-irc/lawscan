@@ -88,11 +88,17 @@ AUDIENCE = Question(
     # correctly identified group went to be dropped — document 100014 bound
     # three, the model found three, two reached the CSV.
     schema=_obj({"merged": _STRING, "split": _STRINGS}, ["merged", "split"]),
+    # Who is bound is stated in the opening and confirmed by the closing
+    # provisions; the schedule of addresses in between says nothing about it.
+    chars=8_000,
+    tail_chars=1_500,
 )
 
 #: Which businesses must know it. The expensive one — it carries the taxonomy.
 BUSINESS = Question(
     name="business",
+    chars=10_000,
+    tail_chars=2_000,
     fills=(
         "กฎหมายเฉพาะธุรกิจ (Core Business Laws)",
         "กฎหมายสนับสนุนและกฎหมายทั่วไปที่ต้องปฏิบัติตาม (Support & General Compliance)",
@@ -109,9 +115,13 @@ BUSINESS = Question(
     ),
 )
 
-#: What it says and what to do about it.
+#: What it says and what to do about it. The most expensive question in the
+#: set — 32% of the bill — because it fills nine columns and writes the two
+#: longest ones.
 SUMMARY = Question(
     name="summary",
+    chars=10_000,
+    tail_chars=2_500,
     fills=(
         "คำอธิบายและสรุปสาระสำคัญ",
         "คำแนะนำสิ่งที่ต้องทำ ",

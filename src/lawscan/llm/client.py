@@ -24,15 +24,26 @@ from pathlib import Path
 from typing import Any
 
 from lawscan.llm.question import Answer, Question, Timer
+from lawscan.ocr.budget import fit
 from lawscan.ocr.read import Document
 
 log = logging.getLogger(__name__)
 
 MODEL = os.environ.get("LAWSCAN_MODEL", "gemini-3.5-flash")
 
-#: Below this an instruction is not worth caching: the provider refuses small
-#: ones, and the round trip to create the cache costs more than it saves.
-CACHE_MIN_CHARS = 3_000
+#: Only to skip prompts that obviously cannot be cached. The real floor is the
+#: provider's — "Cached content is too small. total_token_count=202,
+#: min_total_token_count=1024" — and it is stated in tokens, which this cannot
+#: count without asking. So this is set well below where Thai crosses 1,024
+#: tokens (about 2.9 characters to the token) and the API is left to decide.
+#:
+#: A refusal is remembered, so being wrong here costs one failed call per
+#: prompt per run and never a wrong answer. Being wrong the other way — a
+#: threshold set by guess, above a prompt the API would have accepted — costs
+#: full rate on every document, which is what happened: two prompts sat above
+#: the provider's floor and below a number picked out of the air, and paid for
+#: the same unchanged instruction 91 times each.
+CACHE_MIN_CHARS = 2_400
 
 #: An hour covers a run of any size. Renewed as it approaches rather than after
 #: it lapses — a name kept past its time is not merely useless, the provider
@@ -124,7 +135,7 @@ class Client:
     def ask(self, question: Question, document: Document) -> Answer:
         """Put one question to the model about one document."""
         instruction = self.prompt_for(question)
-        body = document.text(question.chars)
+        body = fit(document.text(), head=question.chars, tail=question.tail_chars)
         answer = Answer(question=question.name, document=document.number, ok=False)
 
         try:
