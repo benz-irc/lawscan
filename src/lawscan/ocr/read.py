@@ -1,0 +1,283 @@
+"""PDF in, Thai text out.
+
+Two routes, chosen per page rather than per document. Real Gazette PDFs are
+mixed: the first pages carry a text layer and a scanned annexe does not, and
+picking one route for the whole file either loses the annexe or re-recognises
+pages that were already perfect.
+
+Everything here is deterministic. No model is called, and the same PDF produces
+the same text every time — which is what makes the rules downstream testable.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+from lawscan import progress
+from lawscan.ocr.thai_text import normalize_text, repair_swapped_sara_aa
+
+log = logging.getLogger(__name__)
+
+#: Below this many characters a page is treated as having no usable text layer,
+#: whatever the PDF claims. A scanned page often carries a handful of stray
+#: characters from a watermark or a stamp.
+_TEXT_LAYER_MIN = 40
+
+#: The running header the Gazette prints on every page. Kept on the first page
+#: — it is where the volume, issue and publication date are read from — and
+#: dropped from the rest, where it interrupts a sentence mid-clause.
+_RUNNING_HEADER = re.compile(
+    r"^\s*(?:หน้า\s*\d+\s*\n)?\s*เล่ม\s*\S+\s*ตอน\S*\s*\S+\s*ราชกิจจานุเบกษา[^\n]*\n",
+    re.MULTILINE,
+)
+
+
+#: A picture below this is a crest, a logo or a signature — decoration that
+#: carries no fact. Above it, on a page with almost no text, the picture *is*
+#: the page: a map annexe, a government form, a diagram with its dimensions
+#: written inside it.
+_MEANINGFUL_IMAGE = 40_000
+
+#: How little text makes a page "a picture with a caption" rather than "a page".
+#: Set from what the corpus actually contains: the uniform-regulation pages
+#: carry 120–160 characters of heading above a full-page illustration, and a
+#: threshold of 40 — which is where the OCR route starts — called every one of
+#: them a normal page.
+_CAPTION_ONLY = 200
+
+
+@dataclass(slots=True)
+class Page:
+    number: int
+    text: str
+    source: str  # "text-layer" or "ocr"
+    #: Whether this page carries a picture large enough to be its content.
+    #: Recorded even when nothing is done about it, because the failure this
+    #: guards against is silent: a document can lose half its pages to images
+    #: and reach the CSV looking complete.
+    has_image: bool = False
+
+    @property
+    def unread(self) -> bool:
+        """A page whose content is in a picture nobody has read."""
+        return self.has_image and len(self.text.strip()) < _CAPTION_ONLY
+
+
+@dataclass(slots=True)
+class Document:
+    path: Path
+    pages: list[Page]
+
+    @property
+    def name(self) -> str:
+        return self.path.stem
+
+    @property
+    def number(self) -> str:
+        """The operator's document number, from the file name."""
+        match = re.search(r"(\d{5,6})", self.path.stem)
+        return match.group(1) if match else self.path.stem
+
+    def text(self, limit: int | None = None) -> str:
+        joined = "\n\n".join(page.text for page in self.pages)
+        return joined[:limit] if limit else joined
+
+    @property
+    def scanned_pages(self) -> int:
+        return sum(1 for page in self.pages if page.source == "ocr")
+
+    @property
+    def unread_pages(self) -> tuple[int, ...]:
+        """Pages whose content is a picture nothing has read."""
+        return tuple(p.number for p in self.pages if p.unread)
+
+    def save(self, into: Path) -> Path:
+        """Keep the extracted text so nothing has to extract it again.
+
+        Two files. The JSON is what the machine reads back — pages kept apart,
+        because a rule that counts sections needs to know where one page ends.
+        The ``.txt`` is what a person reads, and is the first thing to open
+        when a cell looks wrong.
+        """
+        into.mkdir(parents=True, exist_ok=True)
+        (into / f"{self.number}.txt").write_text(self.text(), encoding="utf-8")
+        record = into / f"{self.number}.json"
+        record.write_text(
+            json.dumps(
+                {
+                    "number": self.number,
+                    "source_pdf": str(self.path),
+                    "unread_pages": list(self.unread_pages),
+                    "pages": [
+                        {
+                            "number": p.number,
+                            "source": p.source,
+                            "has_image": p.has_image,
+                            "text": p.text,
+                        }
+                        for p in self.pages
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return record
+
+
+def load(record: Path) -> Document:
+    """A document read back from saved text, with no PDF involved."""
+    stored = json.loads(record.read_text(encoding="utf-8"))
+    return Document(
+        path=Path(stored["source_pdf"]),
+        pages=[
+            Page(p["number"], p["text"], p["source"], has_image=p.get("has_image", False))
+            for p in stored["pages"]
+        ],
+    )
+
+
+def extract(paths: list[Path], into: Path, *, ocr: bool = True) -> int:
+    """Every PDF to saved text. The one expensive step, done once.
+
+    Rendering a page at 300 dpi and recognising it takes seconds; reading the
+    result back takes none. Separating them is what makes it reasonable to
+    re-run the rules twenty times in an afternoon.
+    """
+    written = 0
+    for position, path in enumerate(paths, start=1):
+        progress.document(position, len(paths), path.name)
+        try:
+            document = read(path, ocr=ocr)
+        except Exception as exc:  # noqa: BLE001 — one bad file is not a bad run
+            log.error("%s ล้ม: %s: %s", path.name, type(exc).__name__, exc)
+            continue
+        record = document.save(into)
+        written += 1
+        lost = document.unread_pages
+        layer = sum(1 for p in document.pages if p.source == "text-layer")
+        progress.step(
+            "อ่าน", "pymupdf",
+            f"{len(document.pages)} หน้า · text-layer {layer} · ocr {document.scanned_pages}"
+            f" · {len(document.text()):,} ตัวอักษร"
+            + (f" · ⚠ {len(lost)} หน้าเป็นภาพ (หน้า {', '.join(map(str, lost))})" if lost else ""),
+        )
+        progress.step("เก็บ", "แฟ้มข้อความ", f"{record.parent}/{record.stem}.txt + .json")
+    return written
+
+
+def read(path: Path, *, ocr: bool = True) -> Document:
+    """Every page of a PDF as repaired Thai text."""
+    import fitz  # imported here so `lawscan --help` works without PyMuPDF
+
+    pages: list[Page] = []
+    with fitz.open(path) as pdf:
+        for index, page in enumerate(pdf, start=1):
+            raw = page.get_text() or ""
+            source = "text-layer"
+            if len(raw.strip()) < _TEXT_LAYER_MIN and ocr:
+                raw = _recognise(page)
+                source = "ocr"
+            pages.append(Page(index, raw, source, has_image=_has_picture(page)))
+
+    # The header is stripped after every page is read, not during, because
+    # "keep the first one" means the first one in the document — and the first
+    # page of a Gazette PDF is often a title page carrying no header at all.
+    # Stripping per page against index == 1 threw the only copy away.
+    _strip_headers(pages)
+
+    document = Document(path, pages)
+
+    # Said out loud, every time. A document that lost half its pages to
+    # pictures used to reach the CSV looking exactly like one that lost none.
+    lost = document.unread_pages
+    if lost:
+        log.warning(
+            "%s: %d/%d หน้าเป็นภาพที่ยังอ่านไม่ได้ (หน้า %s) — ผลลัพธ์อาจไม่ครบ",
+            path.name, len(lost), len(pages), ", ".join(str(n) for n in lost),
+        )
+    return document
+
+
+def _has_picture(page: object) -> bool:
+    """Whether this page carries a picture big enough to be its content."""
+    try:
+        images = page.get_images(full=True)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 — a page that cannot be asked has none
+        return False
+    # PyMuPDF gives (xref, smask, width, height, ...) per image.
+    return any(image[2] * image[3] >= _MEANINGFUL_IMAGE for image in images)
+
+
+def _recognise(page: object) -> str:
+    """Recognise one page, or return nothing if the tools are not installed.
+
+    A missing Tesseract is a fact about the machine, not an error in the
+    document — the page comes back empty, the rules find nothing on it, and
+    that is visible rather than fatal.
+    """
+    try:
+        import io
+
+        import pytesseract
+        from PIL import Image
+    except ImportError:
+        _engine_missing("pytesseract ยังไม่ได้ติดตั้ง")
+        return ""
+
+    try:
+        # 300 dpi. Thai tone marks sit above the line and are the first thing
+        # lost at a lower resolution.
+        pixmap = page.get_pixmap(dpi=300)  # type: ignore[attr-defined]
+        image = Image.open(io.BytesIO(pixmap.tobytes("png")))
+        return pytesseract.image_to_string(image, lang="tha+eng")
+    except Exception as exc:  # noqa: BLE001 — one bad page is not a bad document
+        if type(exc).__name__ == "TesseractNotFoundError":
+            _engine_missing("ไม่พบโปรแกรม tesseract")
+            return ""
+        log.warning("อ่านหน้านี้ไม่สำเร็จ: %s", type(exc).__name__)
+        return ""
+
+
+#: Said once per run, not once per page. Ninety-one documents produced the same
+#: line hundreds of times and it read as noise rather than as the one thing
+#: standing between the corpus and eighteen unread pages.
+_ENGINE_WARNED = False
+
+
+def _engine_missing(why: str) -> None:
+    global _ENGINE_WARNED
+    if _ENGINE_WARNED:
+        return
+    _ENGINE_WARNED = True
+    log.warning(
+        "%s — หน้าที่เป็นภาพจะว่างเปล่า\n"
+        "  ติดตั้งด้วย:  brew install tesseract tesseract-lang\n"
+        "  (ต้องมี tesseract-lang ด้วย ตัวหลักไม่มีภาษาไทย)",
+        why,
+    )
+
+
+def _strip_headers(pages: list[Page]) -> None:
+    """Repair the Thai, and keep exactly one copy of the running header.
+
+    The header is where the volume, issue and publication date are read from,
+    so one copy has to survive. Every later copy interrupts a sentence mid
+    clause and has to go.
+
+    ``repair_swapped_sara_aa`` runs per page rather than over the whole
+    document because the fault it fixes belongs to a font, and a document can
+    change font between its body and an appendix.
+    """
+    seen = False
+    for page in pages:
+        text = repair_swapped_sara_aa(page.text)
+        if seen:
+            text = _RUNNING_HEADER.sub("", text)
+        elif _RUNNING_HEADER.search(text):
+            seen = True
+        page.text = normalize_text(text)
