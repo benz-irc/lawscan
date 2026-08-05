@@ -23,7 +23,7 @@ from pathlib import Path
 from lawscan.export.columns import COLUMNS, write_csv
 from lawscan.llm.client import ENV_FILE, Client, key_is_available
 from lawscan.llm.questions import ALL, BY_NAME
-from lawscan import progress
+from lawscan import confidence, progress
 from lawscan.merge import Row
 from lawscan.ocr.read import Document, load, read
 from lawscan.rules import categories, run_all
@@ -187,6 +187,33 @@ def one(path: Path, client: Client | None, workdir: Path, *, no_ocr: bool = Fals
             if not column.startswith("_"):
                 row.cells.pop(column, None)
                 row.put(column, value, "rule")
+
+    # Confidence last, once every column has whatever it is going to have.
+    # It is computed rather than asked for: the model returned 0.8 or higher
+    # on all 91 documents, including one that had lost twelve pages.
+    verdict = confidence.judge(document, row)
+    row.cells.pop("ระดับความมั่นใจ", None)
+    row.put("ระดับความมั่นใจ", f"{verdict.score:.2f}", "rule:confidence")
+    if verdict.findings:
+        existing = row.value("หมายเหตุ")
+        row.cells.pop("หมายเหตุ", None)
+        row.put("หมายเหตุ", " · ".join(x for x in (existing, verdict.note) if x),
+                "rule:confidence")
+        (here / "confidence.json").write_text(
+            json.dumps(
+                {
+                    "score": verdict.score,
+                    "needs_review": verdict.needs_review,
+                    "findings": [
+                        {"rule": f.rule, "penalty": f.penalty, "why": f.why,
+                         "columns": list(f.columns)}
+                        for f in verdict.findings
+                    ],
+                },
+                ensure_ascii=False, indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     sources = row.sources()
     progress.step(

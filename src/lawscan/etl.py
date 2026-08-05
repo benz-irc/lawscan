@@ -19,6 +19,7 @@ error.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime
@@ -30,6 +31,25 @@ from lawscan.pipeline import new_run, scan
 from lawscan.where import report
 
 log = logging.getLogger(__name__)
+
+
+def _unread(files: list[Path], text: Path) -> list[Path]:
+    """Documents whose saved text still has pages nobody could read."""
+    needing = []
+    for pdf in files:
+        record = text / f"{_number(pdf)}.json"
+        if not record.exists():
+            continue
+        try:
+            stored = json.loads(record.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        # Already read the pictures on a previous pass; nothing more to try.
+        if any(p.get("source") == "text-layer+ocr" for p in stored.get("pages", [])):
+            continue
+        if stored.get("unread_pages"):
+            needing.append(pdf)
+    return needing
 
 
 def _number(path: Path) -> str:
@@ -75,6 +95,21 @@ def run(
             extract(missing, text, ocr=not no_ocr)
         else:
             log.info("── ขั้นที่ 1  ข้อความครบแล้วใน %s ── ข้าม", text)
+
+        # Go back to the PDF only for the documents that need it. Reading the
+        # pictures on all 91 took seven minutes for 0.3% more text; reading
+        # them on the six documents that lost pages to pictures takes seconds.
+        #
+        # The trigger is a fact about the file, not the model's opinion of its
+        # own answer: `confidence` came back at or above 0.8 on every one of
+        # the 91, which makes it useless for deciding anything.
+        if not no_ocr:
+            unread = _unread(files, text)
+            if unread:
+                log.info(
+                    "── ขั้นที่ 1ข  %d ฉบับมีหน้าเป็นภาพ อ่านภาพเพิ่ม ──", len(unread)
+                )
+                extract(unread, text, mode="image")
 
     log.info("")
     log.info("── ขั้นที่ 2  อ่านกฎและถามโมเดล ── %d ฉบับ", len(files))

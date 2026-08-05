@@ -322,8 +322,11 @@ def main(argv: list[str] | None = None) -> int:
                        help="กลุ่มเป้าหมายลง CSV แบบไหน (ค่าเริ่มต้น split)")
     p_scan.add_argument("--batch", type=int, default=1, metavar="N",
                         help="ทำพร้อมกันครั้งละ N ฉบับ")
-    p_scan.add_argument("--text", type=Path, metavar="DIR",
-                        help="ใช้ข้อความที่ lawscan ocr เก็บไว้ ไม่ต้องอ่าน PDF ใหม่")
+    p_scan.add_argument("--text", type=Path, metavar="DIR", default=Path("text"),
+                        help="ใช้ข้อความที่ lawscan ocr เก็บไว้ (ค่าเริ่มต้น text) "
+                             "ฉบับที่ยังไม่มี จะอ่านจาก PDF ให้เอง")
+    p_scan.add_argument("--no-text-cache", dest="text", action="store_const", const=None,
+                        help="อ่าน PDF ใหม่ทุกครั้ง")
     p_scan.add_argument("--into", type=Path, metavar="DIR",
                         help="สร้างโฟลเดอร์ result40-<เวลา> ในนี้ และข้ามฉบับที่รอบก่อนทำแล้ว")
     p_scan.add_argument("--skip-done", type=Path, nargs="*", metavar="DIR",
