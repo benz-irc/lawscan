@@ -26,6 +26,17 @@ out/
 # belong to whoever runs this, not to the program.
 pdfs/*.pdf
 
+# The reference spreadsheet. Someone's own reading of forty laws, answer by
+# answer — their work, not this program's, and not ours to publish. Every
+# command that wants it takes a path, so a copy anywhere on disk works:
+#
+#   lawscan diff out/r.csv --expected /path/to/expected.csv
+#
+# Without it `lawscan diff` has nothing to compare against and the test that
+# guards the prompts against containing its answers skips itself. Both say so
+# rather than passing quietly.
+data/expected.csv
+
 # Rendered pages, kept while looking at what an image page contains.
 *.png
 

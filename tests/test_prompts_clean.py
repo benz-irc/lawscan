@@ -63,6 +63,17 @@ def answers() -> dict[str, tuple[str, str]]:
     return found
 
 
+#: The reference file is the operator's own work and is not in this repository.
+#: Without it there is nothing to leak and nothing to check, and the honest
+#: outcome is a skip that says so — not a pass, which would read as "the
+#: prompts were checked and are clean".
+needs_reference = pytest.mark.skipif(
+    not EXPECTED.exists(),
+    reason=f"ไม่มี {EXPECTED} — ตรวจเฉลยที่หลุดเข้าพรอมป์ไม่ได้",
+)
+
+
+@needs_reference
 @pytest.mark.parametrize("prompt", PROMPTS, ids=lambda p: p.name)
 def test_no_reference_answer_appears(prompt):
     text = " ".join(prompt.read_text(encoding="utf-8").split())
@@ -77,9 +88,10 @@ def test_no_reference_answer_appears(prompt):
     )
 
 
+@needs_reference
 def test_the_guard_can_actually_see_a_leak():
     """A test that cannot fail is not a test."""
     known = answers()
-    assert known, "ไม่มีไฟล์อ้างอิงให้ตรวจ"
+    assert known, f"{EXPECTED} มีอยู่แต่อ่านคำตอบออกมาไม่ได้"
     sample = next(iter(known))
     assert sample in f"ตัวอย่างเช่น {sample} ซึ่งเป็นคำตอบที่ถูก"
