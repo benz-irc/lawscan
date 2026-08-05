@@ -70,7 +70,18 @@ PARENT = Question(
 AUDIENCE = Question(
     name="audience",
     fills=("กลุ่มเป้าหมาย",),
-    schema=_obj({"audience": _STRING, "roles": _STRINGS}, ["audience"]),
+    # A list, not a sentence, and no second field to put an answer in.
+    #
+    # Both halves of that were bugs. Asked for a string, the model wrote two
+    # groups joined by "และ" — one cell that reads as a single group meeting
+    # both conditions, when it is two groups meeting one each. And a ``roles``
+    # field, described as supporting detail and filling no column at all, was
+    # where a correctly identified third group went to be dropped: document
+    # 100014's นิติบุคคลที่ประสงค์จะจัดการฝึกอบรม was found, listed under
+    # roles, and never reached the CSV.
+    #
+    # One group per item, one place to put them.
+    schema=_obj({"audience": _STRINGS}, ["audience"]),
 )
 
 #: Which businesses must know it. The expensive one — it carries the taxonomy.
