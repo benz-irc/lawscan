@@ -19,6 +19,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from lawscan import sheet
+
 csv.field_size_limit(10**8)
 
 #: Values both files use to mean "nothing here". Compared as equals, so a dash
@@ -34,6 +36,16 @@ PROSE = {
     "AI ให้เหตุผล",
     "หมายเหตุ",
 }
+
+#: Columns nothing in the document can answer. The Gazette's own URL carries
+#: the site's document id, and that id appears in neither the extracted text
+#: nor the PDF metadata — it is provenance the operator holds from downloading
+#: the file. Scoring it would measure whether someone handed us a lookup table,
+#: which is why it is reported like any other column and counted like none.
+EXTERNAL = {"ลิงค์PDF"}
+
+#: Everything left out of the score, for whichever reason.
+UNSCORED = PROSE | EXTERNAL
 
 #: Columns written as a set of items rather than a sentence. Order carries no
 #: meaning in them, so they are compared as sets and can be partially right.
@@ -62,24 +74,229 @@ _THAI_DIGITS = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
 #: The Gazette's name and the operator's abbreviation of it.
 _SAME_WORD = {"ราชกิจจาฯ": "ราชกิจจานุเบกษา"}
 
+#: ``ำ`` typed as นิคหิต + สระอา. The two spell the same vowel and render the
+#: same, and Unicode keeps them apart: SARA AM has no canonical decomposition,
+#: so NFC leaves ``การนําเข้า`` and ``การนำเข้า`` as different strings. The
+#: operator's spreadsheet uses the first, the text extracted from the PDF uses
+#: the second, and the cell was scored as a miss over a keystroke.
+_SARA_AM = ("ํา", "ำ")
 
-def norm(value: str) -> str:
-    """One spelling of a value, so two spellings of the same answer agree."""
+
+def _plain(value: str) -> str:
+    """Trimmed, blanks unified, numbers written one way, case folded."""
     text = unicodedata.normalize("NFC", value or "").strip()
     if text in BLANK:
         return ""
-    # A document number arrives from Numbers as a float.
-    if re.fullmatch(r"\d+\.0", text):
-        text = text[:-2]
-    text = text.translate(_THAI_DIGITS)
+    # A number is a number however it is written: a document number arrives
+    # from Numbers as 100001.0, and a confidence of 1 as "1.0" from one side
+    # and "1.00" from the other.
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        number = float(text)
+        text = f"{number:g}"
+    return " ".join(text.split()).casefold()
+
+
+def _digits(text: str) -> str:
+    return text.translate(_THAI_DIGITS)
+
+
+def _vowel(text: str) -> str:
+    return text.replace(*_SARA_AM)
+
+
+def _known_words(text: str) -> str:
     for short, full in _SAME_WORD.items():
         text = text.replace(short, full)
-    text = _PUNCT.sub(" ", text)
-    return " ".join(text.split()).casefold()
+    return text
+
+
+def _marks(text: str) -> str:
+    return " ".join(_PUNCT.sub(" ", text).split())
+
+
+def norm(value: str) -> str:
+    """One spelling of a value, so two spellings of the same answer agree.
+
+    Assembled from the steps above rather than written out, because
+    :func:`match_reason` walks the same steps one at a time to say which of
+    them a given pair of cells needed. Two lists of folds would drift apart,
+    and the one that drifted would be the one making the claim.
+    """
+    return _marks(_known_words(_vowel(_digits(_plain(value)))))
 
 
 def items(value: str) -> set[str]:
     return {part for part in (norm(p) for p in _SPLIT.split(value or "")) if part}
+
+
+#: Thai does not put spaces between words. Where a space falls in a Thai
+#: sentence is a typesetting decision, and the two files make it differently on
+#: purpose: ``export.columns._spaced`` opens a space before ``ว่าด้วย`` because
+#: the Gazette prints one, and the reference spreadsheet closes it up. Of the
+#: 5,301 scored cells in the 240-document run, 177 disagreed about nothing else.
+#:
+#: This is why the comparison key is built rather than the normal form reused:
+#: ``norm`` still has to produce something a person can read back, and a value
+#: with every space taken out is not that.
+_SPACES_OUT = re.compile(r"\s+")
+
+#: Thai tone marks, and ``ำ`` where ``า`` belongs. The text layer of a scanned
+#: Gazette page returns ``ก่อสรำง`` for ``ก่อสร้าง`` — the vowel and the tone
+#: mark are lost together — so both have to go for the two spellings to meet.
+#: The fold is looser than Thai really is: it also makes ``นำ`` and ``นา`` one
+#: word. That is the price of forgiving damage that cannot be repaired, and it
+#: is paid where the alternative is reporting an extraction fault as a wrong
+#: answer.
+_OCR_DAMAGE = re.compile(r"[่-๋]")
+
+#: The word in front of a place name. The reference file writes ``จังหวัด
+#: บุรีรัมย์`` in some rows and ``บุรีรัมย์`` in others; the export always
+#: writes it bare. Only offered in the columns that hold a place, because a law
+#: whose *title* begins with ``จังหวัด`` is a different law from one that does
+#: not.
+_PLACE_WORD = re.compile(r"^(?:จังหวัด|อำเภอ|กิ่งอำเภอ)")
+
+PLACE_COLUMNS = frozenset({"จังหวัด", "อำเภอ"})
+
+
+def _bare_places(text: str) -> str:
+    """Each place in a list with its word taken off, item by item.
+
+    Done per item rather than with one pass over the whole string: a pattern
+    that has to find the start of the second name has to match the separator
+    too, and matching the separator means consuming the space after it on one
+    side and not the other — which turns a place difference into a spacing
+    difference and misreports why the two cells agreed.
+    """
+    return ",".join(_PLACE_WORD.sub("", part.strip()) for part in text.split(","))
+
+
+def key(value: str, column: str = "") -> str:
+    """The form two cells are compared in.
+
+    Everything ``norm`` folds, plus the three differences that carry no meaning
+    in Thai: where the spaces fall, which vowel the extraction managed to keep,
+    and whether a place name was written with its word in front.
+
+    Each fold is narrow and each one is reported by :func:`match_reason`, so a
+    cell that only matched because of one can be found and argued with.
+    """
+    text = norm(value)
+    if column.strip() in PLACE_COLUMNS:
+        text = _bare_places(text)
+    text = _OCR_DAMAGE.sub("", text).replace("ำ", "า")
+    return _SPACES_OUT.sub("", text)
+
+
+def parts(value: str, column: str = "") -> set[str]:
+    """A list cell as the set of things it names."""
+    return {p for p in (key(x, column) for x in _SPLIT.split(value or "")) if p}
+
+
+#: A section, clause or bracketed sub-section. Stripping these leaves the law
+#: being cited, so two citations of one law can be compared on the address
+#: alone.
+_CITATION = re.compile(r"\s*(?:มาตรา|ข้อ|วรรค[฀-๿]*|\([\d๐-๙/]+\))\s*[\d๐-๙/]*")
+
+#: Columns whose whole point is to name a place inside a law. Two cells here
+#: that name the same Act and differ only on where in it are not two answers
+#: about which law applies — they are one answer with a finer address on one
+#: side. Fifty-nine cells of the 240-document run are that and nothing else,
+#: most of them a ``(๑)`` the penalty column drops and the reference keeps.
+CITED_COLUMNS = frozenset({"กฎหมายแม่", "บทลงโทษ"})
+
+
+def address(value: str) -> str:
+    """A citation with its section numbers removed — the law it points at.
+
+    Works on the raw string rather than on :func:`norm`, because normalising
+    turns ``(3)`` into a bare ``3`` that no longer reads as a sub-section.
+    """
+    folded = (value or "").translate(_THAI_DIGITS)
+    return " ".join(_CITATION.sub(" ", folded).split()).replace(".", "").lower()
+
+
+def addresses(value: str) -> set[str]:
+    """The section and clause references a citation carries."""
+    folded = (value or "").translate(_THAI_DIGITS)
+    return {found.strip() for found in _CITATION.findall(folded) if found.strip()}
+
+
+def _place_step(text: str, column: str) -> str:
+    return _bare_places(text) if column.strip() in PLACE_COLUMNS else text
+
+
+#: Columns whose value is one of a fixed set of bands, written three ways in
+#: the operator's own file:
+#:
+#:     ⚪️ เทา                            87 rows
+#:     ⚪️ เทา (Amendment / No Impact)     24 rows — the band with its gloss
+#:     เทา                                 1 row  — the band without its emoji
+#:
+#: All three name the same band. The parenthetical is a translation of the
+#: colour, not a fact about the law, and the emoji is decoration their sheet
+#: sometimes drops. Counting these as disagreements said the band was wrong on
+#: 45 documents where it was right.
+BAND_COLUMNS = frozenset({"ระดับวามเสี่ยง ", "ระดับวามเสี่ยง", "ระดับความเสี่ยง"})
+
+_GLOSS = re.compile(r"\s*\([^)]*\)")
+_NOT_THAI = re.compile(r"[^฀-๿ ]")
+
+
+def band_of(value: str) -> str:
+    """The colour a band cell names, with the gloss and the emoji taken off."""
+    return " ".join(_NOT_THAI.sub("", _GLOSS.sub("", value or "")).split())
+
+
+def _band_step(value: str, column: str) -> str:
+    """The ladder's band fold — applied to the raw string, before ``key``."""
+    if column not in BAND_COLUMNS:
+        return key(value, column)
+    return key(band_of(value), column)
+
+
+#: The folds in the order they are applied, each with the difference it is the
+#: first to forgive. ``match_reason`` walks this list and stops at the step
+#: that makes two cells meet, so the reason names what actually mattered rather
+#: than the last thing that was tried.
+#:
+#: Every entry rebuilds the value from the raw string, so the list reads as
+#: "everything up to and including this step" and no entry depends on being
+#: called after another.
+LITERAL = "ตรงทุกตัวอักษร"
+
+_LADDER: tuple[tuple[str, object], ...] = (
+    (LITERAL, lambda s, c: (s or "").strip()),
+    ("ต่างแค่ตัวพิมพ์หรือช่องว่างหัวท้าย", lambda s, c: _plain(s)),
+    ("ต่างแค่เลขไทย/อารบิก", lambda s, c: _digits(_plain(s))),
+    ("ต่างที่การพิมพ์สระ อำ", lambda s, c: _vowel(_digits(_plain(s)))),
+    ("ต่างแค่เครื่องหมายวรรคตอน", lambda s, c: norm(s)),
+    ("ต่างแค่คำนำหน้าชื่อสถานที่", lambda s, c: _place_step(norm(s), c)),
+    ("ต่างแค่เว้นวรรค", lambda s, c: _SPACES_OUT.sub("", _place_step(norm(s), c))),
+    ("ต่างที่สระ ำ/า ซึ่ง OCR อ่านเพี้ยน", lambda s, c: key(s, c)),
+    ("ต่างแค่การเขียนชื่อแถบสี", _band_step),
+)
+
+ORDER_ONLY = "ต่างแค่ลำดับรายการ"
+
+
+def match_reason(theirs: str, ours: str, column: str = "") -> str:
+    """Why two cells were counted as agreeing, or "" if they were not.
+
+    A score that folds differences without saying which ones it folded is a
+    score nobody can check. This is the column that makes the workbook
+    auditable: every cell counted right names the difference it was forgiven,
+    and ``ตรงทุกตัวอักษร`` is the answer for the ones that needed nothing.
+    """
+    for label, fold in _LADDER:
+        if fold(theirs, column) == fold(ours, column):
+            return label
+    # Not a match on the whole string. It can still be one set of items in two
+    # orders, which is the only remaining way to agree.
+    here = parts(theirs, column)
+    if here and here == parts(ours, column):
+        return ORDER_ONLY
+    return ""
 
 
 @dataclass
@@ -103,37 +320,53 @@ class Column:
 
 
 def compare_cell(column: str, theirs: str, ours: str) -> str:
-    """One of: blank, exact, partial, wrong."""
-    a, b = norm(theirs), norm(ours)
+    """One of: blank, exact, partial, wrong.
+
+    Compared on :func:`key` rather than :func:`norm`, so a difference Thai does
+    not use to carry meaning is not counted as a difference of answer. What
+    each fold forgives is written beside it, and :func:`match_reason` reports
+    which one a given cell needed.
+    """
+    a, b = key(theirs, column), key(ours, column)
     if not a and not b:
         return "blank"
     if a == b:
+        return "exact"
+    # The same band written with or without its gloss, with or without its
+    # emoji. Their file does all three and means one thing by them.
+    if column in BAND_COLUMNS and band_of(theirs) and band_of(theirs) == band_of(ours):
         return "exact"
     if not a or not b:
         # One side has an answer and the other does not. That is a real miss in
         # both directions: a cell we left empty, or one we invented.
         return "wrong"
     if column in LISTS:
-        left, right = items(theirs), items(ours)
+        # A set written in another order is the same set. Scoring that as
+        # "partial" charged half a cell for a comma, and the reference file
+        # orders its codes by no rule at all.
+        left, right = parts(theirs, column), parts(ours, column)
+        if left == right:
+            return "exact"
         return "partial" if left & right else "wrong"
     # A title that gained or lost a trailing clause is closer than a wrong one.
-    return "partial" if a in b or b in a else "wrong"
+    if a in b or b in a:
+        return "partial"
+    # Same Act, different address inside it. Both cells agree about which law
+    # a reader has to open, which is most of what these columns are for, so
+    # this is a near miss and not a wrong answer.
+    if column.strip() in CITED_COLUMNS and address(theirs) == address(ours):
+        return "partial"
+    return "wrong"
 
 
-def _rows(path: Path) -> tuple[list[str], dict[str, list[str]]]:
-    with path.open(newline="", encoding="utf-8-sig") as handle:
-        table = list(csv.reader(handle))
-    header, body = table[0], table[1:]
-    try:
-        key_at = header.index("ชื่อไฟล์ ")
-    except ValueError:
-        key_at = 1
-    by_document: dict[str, list[str]] = {}
-    for row in body:
-        key = norm(row[key_at]) if len(row) > key_at else ""
-        if key:
-            by_document.setdefault(key, row)
-    return header, by_document
+def _rows(path: Path) -> tuple[list[str], dict[str, dict[str, str]]]:
+    """(header, rows by document number) from a CSV or a spreadsheet.
+
+    Keyed on the number rather than the filename cell: the reference writes
+    ``100001.pdf`` and the export writes ``100001``, and keying on the cell
+    matched nothing at all between the two files.
+    """
+    return sheet.by_document(path)
 
 
 @dataclass
@@ -146,15 +379,15 @@ class Result:
 
     @property
     def scored(self) -> int:
-        return sum(c.scored for c in self.columns.values() if c.name not in PROSE)
+        return sum(c.scored for c in self.columns.values() if c.name not in UNSCORED)
 
     @property
     def credit(self) -> float:
-        return sum(c.credit for c in self.columns.values() if c.name not in PROSE)
+        return sum(c.credit for c in self.columns.values() if c.name not in UNSCORED)
 
     @property
     def exact(self) -> int:
-        return sum(c.exact for c in self.columns.values() if c.name not in PROSE)
+        return sum(c.exact for c in self.columns.values() if c.name not in UNSCORED)
 
 
 def compare(expected: Path, ours: Path) -> Result:
@@ -168,10 +401,8 @@ def compare(expected: Path, ours: Path) -> Result:
     for document in shared:
         credit = scored = 0
         for name, column in columns.items():
-            a = their_header.index(name)
-            b = our_header.index(name)
-            left = theirs[document][a] if a < len(theirs[document]) else ""
-            right = mine[document][b] if b < len(mine[document]) else ""
+            left = theirs[document].get(name, "")
+            right = mine[document].get(name, "")
             verdict = compare_cell(name, left, right)
             if verdict == "blank":
                 column.both_blank += 1
@@ -179,7 +410,7 @@ def compare(expected: Path, ours: Path) -> Result:
             setattr(column, verdict, getattr(column, verdict) + 1)
             if verdict != "exact" and len(column.examples) < 3:
                 column.examples.append((document, left.strip()[:60], right.strip()[:60]))
-            if name in PROSE:
+            if name in UNSCORED:
                 continue
             scored += 1
             credit += 2 if verdict == "exact" else 1 if verdict == "partial" else 0
@@ -216,14 +447,15 @@ def write_comparison(expected: Path, ours: Path, out: Path) -> int:
         for document in shared:
             lines = []
             for name in columns:
-                left = theirs[document][their_header.index(name)]
-                right = mine[document][our_header.index(name)]
+                left = theirs[document].get(name, "")
+                right = mine[document].get(name, "")
                 verdict = compare_cell(name, left, right)
                 if verdict in ("exact", "blank"):
                     continue
                 lines.append((rank[verdict], name, verdict, left.strip(), right.strip()))
             for _, name, verdict, left, right in sorted(lines):
-                kind = "ข้อความยาว" if name in PROSE else "รายการ" if name in LISTS else "ค่าเดียว"
+                kind = ("ข้อความยาว" if name in PROSE else "นอกเอกสาร" if name in EXTERNAL
+                        else "รายการ" if name in LISTS else "ค่าเดียว")
                 writer.writerow([
                     document, name.strip(),
                     {"wrong": "ไม่ตรง", "partial": "ตรงบางส่วน"}[verdict],
@@ -242,7 +474,7 @@ def report(result: Result, *, examples: bool = False) -> str:
         lines.append(
             f"ตรงเป๊ะ {exact:,} ({exact / scored:.1%}) · "
             f"รวมตรงบางส่วน {credit / scored:.1%} · "
-            f"ผิด {scored - exact - sum(c.partial for c in result.columns.values() if c.name not in PROSE):,}"
+            f"ผิด {scored - exact - sum(c.partial for c in result.columns.values() if c.name not in UNSCORED):,}"
         )
     if result.missing:
         lines.append(f"เราไม่มี: {', '.join(result.missing)}")
@@ -259,7 +491,8 @@ def report(result: Result, *, examples: bool = False) -> str:
     for column in ranked:
         if not column.scored and not column.both_blank:
             continue
-        tag = " (ข้อความยาว)" if column.name in PROSE else ""
+        tag = (" (ข้อความยาว)" if column.name in PROSE
+               else " (นอกเอกสาร ไม่นับ)" if column.name in EXTERNAL else "")
         name = (column.name.strip() + tag)[:47]
         lines.append(
             f"{name:<48}{column.exact:>6}{column.partial:>9}"
