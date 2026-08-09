@@ -15,6 +15,8 @@ kind of thing to write down rather than ask about.
 
 from __future__ import annotations
 
+import re
+
 #: In the order a document would use them, longest-first where one contains
 #: another (``พระราชบัญญัติประกอบรัฐธรรมนูญ`` before ``พระราชบัญญัติ``), because
 #: the earliest match in the text wins and a prefix would win wrongly.
@@ -53,10 +55,34 @@ NARRATIVE: frozenset[str] = frozenset(
 HEAD = 3_000
 
 
+#: The damage a Gazette text layer does inside Thai: the tone mark goes and
+#: ``า`` comes back as ``ำ``. ``คำพิพากษา`` extracts as ``คำพิพำกษำ``, which is
+#: still entirely Thai — so :func:`ocr.read.looks_garbled` cannot see it, the
+#: page is kept as a text layer, and this rule finds no kind it recognises.
+#:
+#: Document 100081 is what that costs. Its masthead reads ``คำพิพำกษำ``, so the
+#: earliest kind matched was ``พระราชบัญญัติ`` from the subject line 1,782
+#: characters later — the Act the defendant was charged under, not what the
+#: document is. Everything keyed on the type then went with it: the title
+#: composition, the dash in ``กฎหมายแม่`` that judgments get, the expiry rule
+#: that must not read a judgment's recited dates. Re-running cannot fix it,
+#: which is why the document sat at 33% across two full passes.
+#:
+#: Both sides are folded, because the vocabulary carries the same vowel:
+#: folding only the text turns ``คำพิพากษา`` in this list into something the
+#: folded page no longer contains.
+_DAMAGE = re.compile(r"[่-๋]")
+
+
+def _forgiving(text: str) -> str:
+    return _DAMAGE.sub("", text or "").replace("ำ", "า")
+
+
 def read(text: str) -> str:
     """The document's own name for itself, or nothing if it does not give one."""
-    head = text[:HEAD]
-    found = [(head.find(kind), -len(kind), kind) for kind in KINDS if kind in head]
+    head = _forgiving(text[:HEAD])
+    found = [(head.find(k), -len(kind), kind)
+             for kind in KINDS if (k := _forgiving(kind)) in head]
     if not found:
         return ""
     # Earliest first, and at the same position the longest — otherwise
