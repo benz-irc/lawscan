@@ -195,6 +195,18 @@ def _scan(args: argparse.Namespace) -> int:
     return code
 
 
+def _with_text(ours: Path, text: Path):
+    """(document, its text, its row) for every row whose text was kept."""
+    from lawscan import sheet
+
+    for number, row in sorted(sheet.by_document(ours)[1].items()):
+        saved = text / f"{number}.json"
+        if not saved.exists():
+            continue
+        pages = json.loads(saved.read_text(encoding="utf-8"))["pages"]
+        yield number, "\n".join(page["text"] for page in pages), row
+
+
 def _diff(args: argparse.Namespace) -> int:
     """How far our CSV is from theirs, per column, worst first."""
     from lawscan.diff import compare, report as score_table
@@ -219,6 +231,19 @@ def _diff(args: argparse.Namespace) -> int:
         COLUMNS,
         skip=UNSCORED,
     )
+    # What the document measured and the row did not keep. Needs no reference
+    # file — the two it was written for were found by reading one row by hand.
+    if args.thresholds:
+        from lawscan import thresholds
+        from lawscan.diff import PROSE
+
+        columns = tuple(PROSE - {"AI ให้เหตุผล"}) + ("กลุ่มเป้าหมาย",)
+        print()
+        print(thresholds.report(
+            thresholds.survey(_with_text(args.ours, args.text), columns=columns),
+            columns=columns,
+        ))
+
     if found.mechanical_cells or args.defects:
         print()
         print(defects.report(found) if args.defects else
@@ -436,6 +461,10 @@ def main(argv: list[str] | None = None) -> int:
     p_diff.add_argument("ours", type=Path, nargs="?", default=Path("out/result.csv"))
     p_diff.add_argument("--expected", type=Path, default=Path("data/expected.csv"))
     p_diff.add_argument("--examples", action="store_true", help="แสดงตัวอย่างที่ไม่ตรง")
+    p_diff.add_argument("--thresholds", action="store_true",
+                        help="เงื่อนไขเชิงตัวเลขที่เอกสารระบุ แต่ตารางไม่ได้เก็บไว้")
+    p_diff.add_argument("--text", type=Path, default=Path("text"), metavar="DIR",
+                        help="โฟลเดอร์ข้อความสำหรับ --thresholds")
     p_diff.add_argument("--defects", action="store_true",
                         help="จัดกลุ่มช่องที่ผิดตามลายเซ็น แยกบั๊กโค้ดออกจากโมเดลอ่านผิด")
     p_diff.add_argument("--out", type=Path, help="เขียนไฟล์เทียบทีละช่อง")
