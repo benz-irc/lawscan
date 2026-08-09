@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,15 +52,21 @@ class Question:
     def path(self) -> Path:
         return PROMPTS / f"{self.name}.md"
 
-    def prompt(self, taxonomy: str = "") -> str:
+    def prompt(self, lists: dict[str, str] | None = None) -> str:
         """The instruction as it will be sent, with any list filled in.
 
         Read from disk on every call. A prompt is edited far more often than
         the code around it, and requiring a restart to see a change is how a
         person ends up measuring the wrong version.
+
+        A placeholder with no list behind it becomes empty rather than staying
+        in the text: an instruction that ships ``{{agencies}}`` to the model
+        asks it to guess what was meant, and it will.
         """
         text = self.path.read_text(encoding="utf-8")
-        return text.replace("{{taxonomy}}", taxonomy) if "{{taxonomy}}" in text else text
+        for name in re.findall(r"\{\{(\w+)\}\}", text):
+            text = text.replace(f"{{{{{name}}}}}", (lists or {}).get(name, ""))
+        return text
 
 
 @dataclass(slots=True)
@@ -71,6 +78,11 @@ class Answer:
     ok: bool
     value: dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    #: Which model produced it. Written down because the answer outlives the
+    #: run: a folder kept in June cannot be priced in August unless it says
+    #: what answered it, and two models is the only way to find out whether the
+    #: cheap one is good enough.
+    model: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
@@ -105,6 +117,7 @@ class Answer:
             json.dumps(
                 {
                     "question": self.question,
+                    "model": self.model,
                     "ok": self.ok,
                     "error": self.error,
                     "value": self.value,

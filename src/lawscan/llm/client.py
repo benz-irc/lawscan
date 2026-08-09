@@ -5,6 +5,12 @@ enforcement, the cache. A question knows its prompt and its schema; it does not
 know which provider answers it, and nothing outside this file constructs a
 request.
 
+Two providers, chosen by the model's name. Gemini is below, in full, because
+its cache is a resource that has to be created and renewed. Everything that
+speaks the OpenAI chat API — GPT, DeepSeek, Kimi — is in ``openai_chat``,
+where the cache needs no managing and the schema is enforced rather than
+requested. ``LAWSCAN_MODEL=gpt-5-nano`` is the whole switch.
+
 Caching is not an optimisation bolted on. The business question carries a
 taxonomy of several hundred codes, identical on every call, and re-sending it
 per document was two thirds of the whole bill. Cached, the model sees the same
@@ -23,13 +29,18 @@ import time
 from pathlib import Path
 from typing import Any
 
+from lawscan.llm import openai_chat
 from lawscan.llm.question import Answer, Question, Timer
 from lawscan.ocr.budget import fit
 from lawscan.ocr.read import Document
 
 log = logging.getLogger(__name__)
 
-MODEL = os.environ.get("LAWSCAN_MODEL", "gemini-3.5-flash")
+#: Chosen by measurement rather than by version number. On the forty scored
+#: documents 3.5-flash reaches 66.5% and 2.5-flash 65.1% — a point and a half —
+#: and 2.5-flash costs a quarter as much, which is 235 baht per thousand
+#: documents against 905. The comparison is kept under tests/models.
+MODEL = os.environ.get("LAWSCAN_MODEL", "gemini-2.5-flash")
 
 #: Only to skip prompts that obviously cannot be cached. The real floor is the
 #: provider's — "Cached content is too small. total_token_count=202,
@@ -66,7 +77,11 @@ RETRIES = 2
 #: to cut off slow but living work.
 REQUEST_TIMEOUT = 180
 
-TAXONOMY = Path(__file__).resolve().parents[3] / "data" / "taxonomy.txt"
+#: Where the lists a prompt can name live. A prompt writes ``{{agencies}}``
+#: and the file ``data/agencies.txt`` fills it — kept out of the prompt itself
+#: because these run to tens of kilobytes, and because a list the operator
+#: maintains should be editable without touching an instruction.
+DATA = Path(__file__).resolve().parents[3] / "data"
 
 
 #: Where the key is looked for, in order. The environment first, because that
@@ -78,11 +93,24 @@ KEY_NAMES = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
 ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 
-def find_key() -> str:
-    """The API key, from the environment or from ``.env``.
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+def find_key(model: str = "") -> str:
+    """The API key for whichever provider serves ``model``.
 
     Never logged, never printed, never written anywhere by this program.
+
+    The model decides which key is wanted, so a machine holding keys for three
+    providers at once asks for the right one instead of the first one — and
+    switching models never means also remembering to switch an environment
+    variable.
     """
+    provider = openai_chat.provider_for(model or MODEL)
+    if provider is not None:
+        return openai_chat.find_key(provider, ENV_FILE)
+
     for name in KEY_NAMES:
         value = os.environ.get(name)
         if value:
@@ -98,14 +126,20 @@ def find_key() -> str:
     return ""
 
 
-def key_is_available() -> bool:
+def key_names(model: str = "") -> tuple[str, ...]:
+    """What the key for this model is called, for an error message to name."""
+    provider = openai_chat.provider_for(model or MODEL)
+    return provider.keys if provider is not None else KEY_NAMES
+
+
+def key_is_available(model: str = "") -> bool:
     """Whether a run that needs the model can start at all.
 
     Checked once before the first document rather than discovered on each of
     them. The difference matters: a missing key is one message at the top, not
     two hundred warnings scrolling past and a CSV that is mostly empty.
     """
-    return bool(find_key())
+    return bool(find_key(model))
 
 
 class Client:
@@ -124,19 +158,31 @@ class Client:
         self._lock = threading.Lock()
 
     # ---------------------------------------------------------------- prompt
-    def taxonomy(self) -> str:
-        """The business code list, or nothing if this install has none."""
-        return TAXONOMY.read_text(encoding="utf-8") if TAXONOMY.exists() else ""
+    def lists(self) -> dict[str, str]:
+        """Every list under data/, by the name a prompt would write.
+
+        Missing files come back empty rather than raising: an install without
+        the operator's taxonomy still runs the other four questions, and the
+        one that needs it degrades to a prompt with no list rather than to a
+        crash on the first document.
+        """
+        return {path.stem: path.read_text(encoding="utf-8")
+                for path in sorted(DATA.glob("*.txt"))}
 
     def prompt_for(self, question: Question) -> str:
-        return question.prompt(self.taxonomy())
+        return question.prompt(self.lists())
 
     # ------------------------------------------------------------------ ask
     def ask(self, question: Question, document: Document) -> Answer:
         """Put one question to the model about one document."""
         instruction = self.prompt_for(question)
         body = fit(document.text(), head=question.chars, tail=question.tail_chars)
-        answer = Answer(question=question.name, document=document.number, ok=False)
+        answer = Answer(question=question.name, document=document.number, ok=False,
+                        model=self.model)
+
+        provider = openai_chat.provider_for(self.model)
+        if provider is not None:
+            return self._ask_openai(provider, question, instruction, body, answer)
 
         try:
             from google import genai
@@ -198,6 +244,92 @@ class Client:
                 log.warning("%s: %s", document.number, answer.error)
 
         return answer
+
+    # --------------------------------------------------------- openai-shaped
+    def _ask_openai(self, provider: Any, question: Question, instruction: str,
+                    body: str, answer: Answer) -> Answer:
+        """One call to a provider that speaks the OpenAI chat API.
+
+        Shorter than the Gemini path because there is no cache to create: the
+        instruction leads the request and the provider matches the prefix on
+        its own. The retry loop is the same one, and for the same reason —
+        strict mode guarantees the shape but not that the call arrives.
+        """
+        try:
+            from openai import OpenAI
+        except ImportError:
+            answer.error = "openai ยังไม่ได้ติดตั้ง (pip install openai)"
+            return answer
+
+        client = self._openai_client(provider, OpenAI)
+        if client is None:
+            answer.error = f"ไม่พบ {provider.keys[0]}"
+            return answer
+
+        system = openai_chat.instruction_for(question, instruction, provider)
+        request: dict[str, Any] = {
+            "model": self.model,
+            "messages": openai_chat.messages(system, body),
+            "response_format": openai_chat.response_format(question, provider),
+        }
+        effort = openai_chat.reasoning_effort(self.model, provider)
+        if effort:
+            request["reasoning_effort"] = effort
+
+        for attempt in range(1, RETRIES + 2):
+            with Timer() as timer:
+                try:
+                    response = client.chat.completions.create(**request)
+                except Exception as exc:  # noqa: BLE001
+                    if _is_timeout(exc) and attempt <= RETRIES:
+                        log.warning(
+                            "%s %s: ไม่ตอบใน %d วินาที ลองใหม่ (ครั้งที่ %d)",
+                            answer.document, question.name, REQUEST_TIMEOUT, attempt,
+                        )
+                        continue
+                    # A provider that will not enforce the schema still has to
+                    # answer. Drop to plain JSON and let the retry loop and the
+                    # spelled-out shape carry it, rather than losing the cell.
+                    if _rejects_schema(exc) and request["response_format"]["type"] != "json_object":
+                        log.info("%s ไม่รับ json_schema — ใช้ json_object แทน", self.model)
+                        request["response_format"] = {"type": "json_object"}
+                        request["messages"] = openai_chat.messages(
+                            openai_chat.instruction_for(
+                                question, instruction, _loose(provider)
+                            ),
+                            body,
+                        )
+                        continue
+                    answer.error = f"{type(exc).__name__}: {exc}"[:300]
+                    return answer
+
+            answer.duration_ms = timer.ms
+            openai_chat.read_cost(answer, response)
+            text = (response.choices[0].message.content or "") if response.choices else ""
+            try:
+                answer.value = json.loads(text or "{}")
+                answer.ok = True
+                return answer
+            except ValueError:
+                answer.error = f"คำตอบไม่ใช่ JSON (ครั้งที่ {attempt})"
+                log.warning("%s: %s", answer.document, answer.error)
+
+        return answer
+
+    def _openai_client(self, provider: Any, factory: Any) -> Any:
+        if self._client is not None:
+            return self._client
+        with self._lock:
+            if self._client is not None:
+                return self._client
+            key = openai_chat.find_key(provider, ENV_FILE)
+            if not key:
+                return None
+            self._client = factory(
+                api_key=key, base_url=provider.base_url, timeout=REQUEST_TIMEOUT,
+                max_retries=RETRIES,
+            )
+        return self._client
 
     # ---------------------------------------------------------------- inner
     def _connect(self, genai: Any) -> Any:
@@ -287,6 +419,24 @@ _TIMEOUT_NAMES = ("timeout", "timedout", "readtimeout", "connecttimeout")
 def _is_timeout(exc: BaseException) -> bool:
     seen = f"{type(exc).__name__}".lower().replace("_", "")
     return any(name in seen for name in _TIMEOUT_NAMES)
+
+
+#: What a provider says when it has heard of ``response_format`` but not of
+#: schemas. Matched on the message because the status code is a plain 400,
+#: which is also what a genuinely bad request returns.
+_NO_SCHEMA = ("json_schema", "response_format", "not supported", "unsupported")
+
+
+def _rejects_schema(exc: BaseException) -> bool:
+    said = f"{exc}".lower()
+    return "json_schema" in said and any(word in said for word in _NO_SCHEMA[1:])
+
+
+def _loose(provider: Any) -> Any:
+    """The same provider, recorded as one that cannot enforce a schema."""
+    from dataclasses import replace
+
+    return replace(provider, strict=False)
 
 
 def _digest(text: str) -> str:

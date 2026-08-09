@@ -13,22 +13,33 @@ import pytest
 from lawscan import usage
 from lawscan.usage import PRICE_CACHED, PRICE_INPUT, PRICE_OUTPUT, Usage, read, report
 
+LITE = "gemini-3.5-flash-lite"
 
-def _answers(folder, *, per_question=(1000, 400, 50), questions=usage.QUESTIONS, chars=0):
+
+def _answers(folder, *, per_question=(1000, 400, 50), questions=usage.QUESTIONS, chars=0,
+             model=None):
     """A document folder as a run leaves it."""
     folder.mkdir(parents=True, exist_ok=True)
     tokens_in, cached, tokens_out = per_question
     for question in questions:
+        record = {
+            "question": question, "ok": True, "value": {},
+            "cost": {"input": tokens_in, "cached": cached, "output": tokens_out},
+        }
+        if model:
+            record["model"] = model
         (folder / f"{question}.json").write_text(
-            json.dumps({
-                "question": question, "ok": True, "value": {},
-                "cost": {"input": tokens_in, "cached": cached, "output": tokens_out},
-            }),
-            encoding="utf-8",
+            json.dumps(record), encoding="utf-8",
         )
     if chars:
         (folder / "text.txt").write_text("ก" * chars, encoding="utf-8")
     return folder
+
+
+def _million(folder, model=None):
+    """1M fresh input, 1M cached, 1M output — one of each, in one question."""
+    return _answers(folder, per_question=(2_000_000, 1_000_000, 1_000_000),
+                    questions=("identity",), model=model)
 
 
 class TestCounting:
@@ -95,6 +106,46 @@ class TestPricing:
     def test_never_negative_when_the_provider_over_reports(self):
         """cached above input would make fresh_tokens negative and the bill a refund."""
         assert Usage(input_tokens=100, cached_tokens=500).fresh_tokens == 0
+
+
+class TestModels:
+    """A cheaper model is only cheaper if the bill is read at its own rates.
+
+    The whole point of trying one is the comparison, and a comparison where
+    both runs are priced from the same table says the cheap model costs exactly
+    as much as the expensive one — which is the one answer that cannot be true.
+    """
+
+    def test_a_run_is_priced_at_the_rates_of_the_model_that_answered(self, tmp_path):
+        _million(tmp_path / "100001", model=LITE)
+        price = usage.PRICES[LITE]
+        assert read(tmp_path).cost == pytest.approx(price.input + price.cached + price.output)
+
+    def test_a_run_that_recorded_no_model_is_priced_as_flash(self, tmp_path):
+        """Every run kept before the model was written down was flash."""
+        _million(tmp_path / "100001")
+        assert read(tmp_path).cost == pytest.approx(PRICE_INPUT + PRICE_CACHED + PRICE_OUTPUT)
+
+    def test_two_models_in_one_run_are_each_priced_at_their_own_rate(self, tmp_path):
+        """Answers get borrowed across runs, so one folder can hold both."""
+        _million(tmp_path / "100001", model=LITE)
+        _million(tmp_path / "100002", model="gemini-3.5-flash")
+        lite = usage.PRICES[LITE]
+        flash = usage.PRICES["gemini-3.5-flash"]
+        assert read(tmp_path).cost == pytest.approx(
+            lite.input + lite.cached + lite.output
+            + flash.input + flash.cached + flash.output
+        )
+
+    def test_the_report_names_the_model_it_priced(self, tmp_path):
+        _answers(tmp_path / "100001", model=LITE)
+        assert LITE in report(read(tmp_path))
+
+    def test_a_model_with_no_published_rate_says_so_instead_of_inventing_one(self, tmp_path):
+        _answers(tmp_path / "100001", model="gemini-9-flash")
+        text = report(read(tmp_path))
+        assert "gemini-9-flash" in text
+        assert "ยังไม่มีราคา" in text
 
 
 class TestReport:
