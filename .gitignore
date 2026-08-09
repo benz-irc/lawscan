@@ -22,12 +22,20 @@ tests/result40-*/
 tests/compare40-*/
 out/
 
+# Runs on other models, kept apart on purpose: `done_before` only looks at
+# tests/result40-*, so an answer from a cheaper model can never be borrowed
+# into a run that thinks it is flash.
+tests/models/
+
 # The source documents. The operator's own corpus — 19 MB of Gazette PDFs that
 # belong to whoever runs this, not to the program.
 pdfs/*.pdf
 
 # Rendered pages, kept while looking at what an image page contains.
 *.png
+
+# Browser-automation console logs, written while looking at a rendered page.
+.playwright-mcp/
 
 # macOS
 .DS_Store

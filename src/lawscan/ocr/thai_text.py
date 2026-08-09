@@ -107,9 +107,13 @@ def restore_pua_marks(text: str) -> str:
     unknown = {ch for ch in _PUA_BLOCK.findall(restored) if ch not in _PUA_SEEN}
     if unknown:
         _PUA_SEEN.update(unknown)
+        # Plain formatting, not structured-logging keywords: the standard
+        # library raises TypeError on an unexpected keyword, so the line meant
+        # to report an unknown character was killing the whole document —
+        # including one 462-page instrument that never produced a row.
         log.warning(
-            "unmapped_private_use_marks",
-            codepoints=sorted(f"U+{ord(ch):04X}" for ch in unknown),
+            "พบเครื่องหมายใน Private Use Area ที่ยังไม่มีการแมป: %s",
+            ", ".join(sorted(f"U+{ord(ch):04X}" for ch in unknown)),
         )
     return restored
 
@@ -149,6 +153,16 @@ def compose_sara_am(text: str) -> str:
 #: the same way.
 _SARA_AM_AS_SPACE = re.compile(r"([\u0e01-\u0e2e][\u0e31\u0e34-\u0e3a\u0e47-\u0e4e]?) [\u0e32\u0e33]")
 
+#: And the same three characters the other way round. The tone mark can land
+#: on either side of the gap depending on the font, so ``น้ำ`` arrives as
+#: ``น`` ``้`` space ``า`` in one document and ``น`` space ``้`` ``า`` in the
+#: next. The second is what fills the 2565 irrigation กฎกระทรวง, where every
+#: heading reads ``ทางน ้าชลประทาน``.
+#:
+#: A combining mark after a space is impossible in Thai — it has nothing to
+#: attach to — which is what makes this safe to rewrite rather than guess at.
+_SARA_AM_SPLIT_MARK = re.compile(r"([\u0e01-\u0e2e]) ([\u0e48-\u0e4b])[\u0e32\u0e33]")
+
 
 def restore_sara_am(text: str) -> str:
     """Put back the ``\u0e33`` the PDF fonts turned into a space.
@@ -159,6 +173,7 @@ def restore_sara_am(text: str) -> str:
     that identifies a subordinate instrument, ``\u0e2d\u0e32\u0e28\u0e31\u0e22\u0e2d\u0e33\u0e19\u0e32\u0e08\u0e15\u0e32\u0e21\u0e04\u0e27\u0e32\u0e21\u0e43\u0e19``, is
     unfindable without it, so the rules that depend on it could never fire.
     """
+    text = _SARA_AM_SPLIT_MARK.sub(lambda m: m.group(1) + m.group(2) + "\u0e33", text)
     return _SARA_AM_AS_SPACE.sub(lambda m: m.group(1) + "\u0e33", text)
 
 

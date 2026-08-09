@@ -63,3 +63,65 @@ def test_normalize_recovers_a_gazette_header():
     out = normalize_text(raw)
     assert "เล่ม 137" in out
     assert "หน้า 8" in out
+
+
+class TestSaraAmWithTheMarkAfterTheSpace:
+    """The same fault, with the tone mark on the other side of the gap.
+
+    ``น้ำ`` is a consonant, a tone mark and a sara am. When the font drops the
+    nikhahit the three can arrive either way round — ``น้ า`` or ``น ้า`` — and
+    only the first was handled. The second is what the 2565 กฎกระทรวง on
+    irrigation waterways is full of: ``ทางน ้าชลประทาน`` in every heading.
+    """
+
+    def test_the_mark_after_the_space_is_repaired(self):
+        from lawscan.ocr.thai_text import restore_sara_am
+
+        assert restore_sara_am("ทางน ้าชลประทาน") == "ทางน้ำชลประทาน"
+
+    def test_the_mark_before_the_space_still_is(self):
+        from lawscan.ocr.thai_text import restore_sara_am
+
+        assert restore_sara_am("น้ า") == "น้ำ"
+
+    def test_a_space_between_two_words_is_left_alone(self):
+        from lawscan.ocr.thai_text import restore_sara_am
+
+        assert restore_sara_am("กรม ก. และกรม ข.") == "กรม ก. และกรม ข."
+
+    def test_a_real_sentence_keeps_its_spaces(self):
+        from lawscan.ocr.thai_text import restore_sara_am
+
+        assert restore_sara_am("ให้ใช้บังคับ ตั้งแต่วันถัดไป") == "ให้ใช้บังคับ ตั้งแต่วันถัดไป"
+
+
+class TestUnmappedMarksAreReportedNotFatal:
+    """A character we have no mapping for is news, not a reason to stop.
+
+    The warning was written in structured-logging style — ``log.warning(msg,
+    codepoints=[...])`` — which the standard library rejects with a TypeError.
+    Every document containing an unmapped private-use mark therefore failed
+    entirely, in the extractor and again in the pipeline: one 462-page
+    instrument never produced a single row, and the log line that was supposed
+    to explain it was the thing that raised.
+    """
+
+    def test_an_unmapped_mark_does_not_raise(self):
+        from lawscan.ocr.thai_text import restore_pua_marks
+
+        assert restore_pua_marks("กข") is not None
+
+    def test_it_says_which_codepoint(self, caplog):
+        import logging
+
+        from lawscan.ocr.thai_text import _PUA_SEEN, restore_pua_marks
+
+        _PUA_SEEN.discard("\uf71f")
+        with caplog.at_level(logging.WARNING):
+            restore_pua_marks("ก\uf71fข")
+        assert "U+F71F" in caplog.text
+
+    def test_ordinary_text_is_untouched(self):
+        from lawscan.ocr.thai_text import restore_pua_marks
+
+        assert restore_pua_marks("ประกาศกระทรวง") == "ประกาศกระทรวง"

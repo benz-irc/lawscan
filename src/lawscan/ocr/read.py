@@ -18,7 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lawscan import progress
-from lawscan.ocr.thai_text import normalize_text, repair_swapped_sara_aa
+from lawscan.ocr.thai_text import (
+    normalize_text, repair_swapped_sara_aa, thai_char_ratio,
+)
 
 log = logging.getLogger(__name__)
 
@@ -203,7 +205,7 @@ def read(path: Path, *, ocr: bool = True, mode: str = "text") -> Document:
             source = "text-layer"
             pictured = _has_picture(page)
 
-            if len(raw.strip()) < _TEXT_LAYER_MIN and ocr:
+            if ocr and (len(raw.strip()) < _TEXT_LAYER_MIN or looks_garbled(raw)):
                 raw = _recognise(page)
                 source = "ocr"
             elif ocr and mode == "image" and pictured:
@@ -232,6 +234,45 @@ def read(path: Path, *, ocr: bool = True, mode: str = "text") -> Document:
             path.name, len(lost), len(pages), ", ".join(str(n) for n in lost),
         )
     return document
+
+
+#: Below this share of Thai letters, a page's text layer is not Thai text.
+#: Chosen from the corpus rather than guessed: of 3,424 documents, 846 sit at
+#: 0.2 or below and 2,415 at 0.6 or above, with almost nothing between. Any
+#: value in that gap separates them; the middle is the one that stays right if
+#: a future document lands nearer an edge.
+_THAI_FLOOR = 0.4
+
+#: Below this many letters the ratio is noise — a page holding "หน้า 3" is one
+#: character away from either verdict. Such a page is already going to OCR for
+#: being short, and this must not be what decides it.
+_ENOUGH_LETTERS = 20
+
+
+def looks_garbled(text: str) -> bool:
+    """Whether a page's text layer decoded to something that is not Thai.
+
+    The failure this exists for is not a missing text layer but a *lying* one:
+    a subset font whose glyph table does not line up with Unicode returns a
+    full page of Latin noise, and every check that asks "is there text?"
+    answers yes. ``ในพระปรมาภิไธย`` arrives as ``Ĕîóøąðøöćõĉĕí÷`` — same
+    length, same shape on the page, nothing to notice downstream except five
+    date columns that come out empty.
+
+    Says true only when it can prove the damage. Rendering and recognising a
+    page takes three seconds and can only make a correct page worse, so a page
+    this cannot judge keeps the text it has: a schedule of rates carries no
+    letters to measure, and a page with a line of them is one character away
+    from either verdict. Both are already covered by the length rule.
+
+    Judged on the share of *letters* that are Thai rather than of all
+    characters, so the digits and commas of that schedule do not count against
+    the Thai around them.
+    """
+    letters = [ch for ch in text if ch.isalpha()]
+    if len(letters) < _ENOUGH_LETTERS:
+        return False
+    return thai_char_ratio("".join(letters)) < _THAI_FLOOR
 
 
 def _has_picture(page: object) -> bool:
