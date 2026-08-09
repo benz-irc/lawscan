@@ -14,6 +14,7 @@ value long enough, or listed enough, that it cannot have arrived by coincidence.
 """
 
 import csv
+import re
 from pathlib import Path
 
 import pytest
@@ -95,3 +96,30 @@ def test_the_guard_can_actually_see_a_leak():
     assert known, f"{EXPECTED} มีอยู่แต่อ่านคำตอบออกมาไม่ได้"
     sample = next(iter(known))
     assert sample in f"ตัวอย่างเช่น {sample} ซึ่งเป็นคำตอบที่ถูก"
+
+
+#: Counting the reference answers and writing the count into the instruction
+#: leaks the same thing a pasted answer does, one step removed: it tells the
+#: model how the scored set is distributed. "core is empty 29 of 40 times"
+#: moves the number without improving the reading, and the number then stops
+#: being a measurement of anything.
+STATISTIC = re.compile(
+    r"(ชุดอ้างอิง|ที่มีเฉลย|ไฟล์เฉลย)[^\n]{0,40}\d"
+    r"|\d+\s*(จาก|ใน)\s*\d+\s*ฉบับ"
+    r"|ว่าง\s*\d+\s*ฉบับ"
+)
+
+
+@pytest.mark.parametrize("prompt", PROMPTS, ids=lambda p: p.name)
+def test_no_reference_statistic_appears(prompt):
+    found = STATISTIC.findall(prompt.read_text(encoding="utf-8"))
+    assert not found, (
+        f"{prompt.name} อ้างสถิติที่นับจากไฟล์เฉลย — "
+        "คะแนนที่ได้จะมาจากการรู้การกระจายตัว ไม่ใช่การอ่านเอกสาร"
+    )
+
+
+def test_the_statistic_guard_can_actually_see_one():
+    """A test that cannot fail is not a test."""
+    assert STATISTIC.search("ในชุดอ้างอิง 29 จาก 40 ฉบับมี core ว่าง")
+    assert not STATISTIC.search("ตอบ 2 ถึง 3 รหัส ตามที่เอกสารเขียน")
