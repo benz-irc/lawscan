@@ -123,3 +123,40 @@ def test_the_statistic_guard_can_actually_see_one():
     """A test that cannot fail is not a test."""
     assert STATISTIC.search("ในชุดอ้างอิง 29 จาก 40 ฉบับมี core ว่าง")
     assert not STATISTIC.search("ตอบ 2 ถึง 3 รหัส ตามที่เอกสารเขียน")
+
+
+#: An example a model can lift straight into a cell. What separates the ones
+#: that were copied from the ones that were not is whether the example names
+#: something real: ``ใบอนุญาตให้ประกอบกิจการ`` fits any document and 30 of 240
+#: came back with it, while ``กรม ก.`` fits none and was never copied.
+#:
+#: So an example naming an instrument must name one that does not exist. All
+#: four of these were checked against the whole 3,424-document corpus and
+#: appear in none of it.
+INVENTED = ("ทดสอบระบบ", "ทดสอบอาคาร", "ทดสอบแร่", "ทดสอบผลิตภัณฑ์")
+
+#: A named act inside a prompt, with the year that makes it an act rather than
+#: a phrase.
+_NAMED_ACT = re.compile(
+    r"(?:พระราชบัญญัติ|พระราชกำหนด|พระราชกฤษฎีกา|กฎกระทรวง)\s?[ก-๙]{2,30}\s*"
+    r"(?:พ\.ศ\.|พุทธศักราช)\s*[\d๐-๙]{4}"
+)
+
+
+@pytest.mark.parametrize("prompt", PROMPTS, ids=lambda p: p.name)
+def test_no_example_names_a_real_instrument(prompt):
+    """A worked example must not be usable as an answer.
+
+    Four prompts taught by example and all four were obeyed too literally: the
+    tag columns came back wearing the angle brackets the examples were drawn
+    in, summaries cited sections because an example did, the reasoning column
+    abbreviated ``มาตรา`` to ``ม.`` because an example did, and the licence
+    column returned the five kinds the prompt lists, in that order, on 30
+    documents. An example that names a real act invites the same.
+    """
+    named = _NAMED_ACT.findall(prompt.read_text(encoding="utf-8"))
+    real = [n for n in named if not any(mark in n for mark in INVENTED)]
+    assert not real, (
+        f"{prompt.name} ยกชื่อกฎหมายจริงมาเป็นตัวอย่าง: {real} — "
+        "ใช้ชื่อสมมติที่ไม่มีในคลัง เพื่อไม่ให้ลอกไปเป็นคำตอบได้"
+    )
