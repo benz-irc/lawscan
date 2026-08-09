@@ -167,3 +167,33 @@ _IRRIGATION_ACTIVITIES = ["กำหนดทางน้ำชลประท�
 def irrigation_activities(title: str) -> list[str]:
     """What a "this waterway now charges" regulation is doing."""
     return list(_IRRIGATION_ACTIVITIES) if _WATERWAY.search(title or "") else []
+
+
+#: How much of a name has to appear in the document for the name to be its own.
+#: Long enough that ``ใบอนุญาต`` alone does not vouch for
+#: ``ใบอนุญาตให้ประกอบกิจการ``, short enough to survive the qualifier the
+#: document adds after it.
+_ENOUGH = 8
+
+_QUALIFIER = re.compile(r"\(.*?\)")
+
+
+def _head(name: str) -> str:
+    return _QUALIFIER.sub("", name or "").strip()[:_ENOUGH]
+
+
+def named_in(text: str, items) -> list[str]:
+    """The items the document actually names, in the order given.
+
+    ``prompts/summary.md`` illustrates the licence column with five kinds —
+    ``ใบอนุญาตให้ประกอบกิจการ``, ``ใบรับแจ้ง``, ``หนังสือแสดงความจำนง`` and two
+    more — and the model returned that list, in that order, for 30 documents of
+    240. 75% of the non-empty cells named nothing the document contains.
+
+    A licence is a thing a reader has to go and obtain. If the instrument never
+    mentions it, the row is sending them after a form that does not exist,
+    which is worse than an empty cell. Dropping the unfounded ones removed 12
+    wrong cells and cost no right ones.
+    """
+    return [item for item in items
+            if (head := _head(item)) and head in (text or "")]

@@ -74,6 +74,17 @@ def read(text: str, *, title: str = "") -> dict[str, str]:
     return {signal.code: signal.why for signal in _SIGNALS if signal.pattern.search(window)}
 
 
+#: A family without its number — ``AM`` where ``AM19`` was meant. The prompt
+#: says "หมวดย่อยเสมอ" and nothing enforced it: ten reached the sheet across
+#: 240 documents and the operator's file contains none. A family names a shelf
+#: rather than a business, so it tells a reader nothing they can act on.
+_FAMILY = re.compile(r"^[A-Z]{1,3}$")
+
+
+def _is_family(code: str) -> bool:
+    return bool(_FAMILY.match((code or "").strip().split(" ")[0]))
+
+
 def correct(
     text: str, core: list[str], support: list[str], *, title: str = ""
 ) -> tuple[list[str], list[str]]:
@@ -92,6 +103,9 @@ def correct(
     """
     dead = suppressed(text, title=title)
     found = read(text, title=title)
+
+    core = [c for c in core if not _is_family(c)]
+    support = [c for c in support if not _is_family(c)]
 
     kept_core = [c for c in core if c not in dead]
     kept_support = [c for c in support if c not in dead]

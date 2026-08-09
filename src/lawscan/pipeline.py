@@ -27,12 +27,13 @@ from lawscan.llm.questions import ALL, BY_NAME
 from lawscan import confidence, progress
 from lawscan.answers import (
     irrigation_activities, irrigation_agencies, irrigation_users,
-    local_body_of, once_each,
+    local_body_of, named_in, once_each,
 )
 from lawscan.audience import tidy
 from lawscan.merge import NOTHING, Row
 from lawscan.ocr.read import Document, load, read
 from lawscan.rules import BANDS, PENALTY_TEXT, categories, penalties, run_all
+from lawscan.rules import parent as parent_rule
 
 log = logging.getLogger(__name__)
 
@@ -210,7 +211,7 @@ def one(path: Path, client: Client | None, workdir: Path, *, no_ocr: bool = Fals
             value["core"], value["support"] = categories.correct(
                 document.text(), value.get("core") or [], value.get("support") or []
             )
-        _apply(row, question.name, value)
+        _apply(row, question.name, value, document)
 
     # One rule reads a judgment differently from a law, so it wants the type.
     # It used to come from the model's first answer; the type is now a rule of
@@ -388,7 +389,7 @@ def _piece(value: object) -> str:
     return _item(value)
 
 
-def _apply(row: Row, question: str, value: dict) -> None:
+def _apply(row: Row, question: str, value: dict, document=None) -> None:
     if question == "parent":
         # One line per section cited, which is how the expected file writes it:
         # "พ.ร.บ.ผู้ตรวจการแผ่นดิน พ.ศ. 2560 มาตรา 24, ... มาตรา 42".
@@ -399,10 +400,16 @@ def _apply(row: Row, question: str, value: dict) -> None:
         # ``None`` — which is how document 100001 reached the sheet reading
         # "…พ.ศ. 2560 None". The central empty-value format never saw it,
         # because by then it was part of a longer string.
+        # The Constitution is never a parent. ``rules.parent`` knows this and
+        # cuts the clause out of the preamble before reading it; the model was
+        # never told, and answered ``รัฐธรรมนูญแห่งราชอาณาจักรไทย มาตรา 122``
+        # for two documents whose reference row is a dash. The power to issue
+        # an instrument at all is shared by every instrument of its kind and
+        # says nothing about which act this one implements.
         parents = [
             " ".join(filter(None, (_piece(p.get("law")), _piece(p.get("section")))))
             for p in value.get("parents") or []
-            if _piece(p.get("law"))
+            if _piece(p.get("law")) and not parent_rule.is_constitution(p.get("law"))
         ]
         row.put("กฎหมายแม่", parents, f"llm:{question}")
         return
@@ -433,6 +440,10 @@ def _apply(row: Row, question: str, value: dict) -> None:
             cell = once_each(cell)
         if field == "activityTags":
             cell = irrigation_activities(_cell(row, "ชื่อกฎหมาย")) or cell
+        if field == "licenses" and isinstance(cell, list):
+            # A licence the document never mentions sends the reader after a
+            # form that does not exist.
+            cell = named_in(document.text() if document else "", cell) if document else cell
         if field == "agencies":
             # The waterway regulations name the same two bodies every time,
             # and the title says which kind of document this is.

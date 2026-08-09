@@ -158,3 +158,49 @@ class TestFormattingTheModelBorrowedFromThePrompt:
         assert _text("ระเบียบกรมเจ้าท่า ว่าด้วยเขตการเดินเรือ") == (
             "ระเบียบกรมเจ้าท่า ว่าด้วยเขตการเดินเรือ"
         )
+
+
+class TestAnswersCopiedFromThePrompt:
+    """The fourth time in one corpus that an example became the answer."""
+
+    def test_a_licence_the_document_never_names_is_dropped(self):
+        from lawscan.answers import named_in
+
+        # `prompts/summary.md` listed five kinds of licence as examples, and
+        # 30 documents of 240 came back with that list, in that order.
+        assert named_in("ระเบียบว่าด้วยการสรรหากรรมการ", [
+            "ใบอนุญาตให้ประกอบกิจการ", "ใบรับแจ้ง", "หนังสือแสดงความจำนง",
+        ]) == []
+
+    def test_one_the_document_does_name_survives(self):
+        from lawscan.answers import named_in
+
+        assert named_in("ผู้ใดประสงค์จะประกอบกิจการต้องมีใบอนุญาตให้ประกอบกิจการ",
+                        ["ใบอนุญาตให้ประกอบกิจการ", "ใบรับแจ้ง"]) == [
+            "ใบอนุญาตให้ประกอบกิจการ"]
+
+    def test_a_form_code_in_brackets_matches_on_its_name(self):
+        from lawscan.answers import named_in
+
+        assert named_in("ให้ยื่นแบบแจ้งตามที่ระเบียบกำหนด",
+                        ["แบบแจ้งตามที่ระเบียบกำหนด (แบบ ก.๑)"])
+
+    def test_a_bare_family_code_is_not_an_answer(self):
+        from lawscan.rules.categories import correct
+
+        # "หมวดย่อยเสมอ" is in the prompt and nothing enforced it: ten reached
+        # the sheet and the reference file contains none.
+        core, support = correct("ประกาศเรื่องหนึ่ง", ["AM", "AM19"], ["CC", "CC17"])
+        assert "AM" not in core and "CC" not in support
+        assert "AM19" in core and "CC17" in support
+
+    def test_the_constitution_is_never_a_parent(self):
+        from lawscan.merge import Row
+        from lawscan.pipeline import _apply
+
+        row = Row(document="100059")
+        _apply(row, "parent", {"parents": [
+            {"law": "รัฐธรรมนูญแห่งราชอาณาจักรไทย", "section": "มาตรา 122"},
+            {"law": "พระราชบัญญัติ ก. พ.ศ. 2560", "section": "มาตรา 5"},
+        ]})
+        assert row.value("กฎหมายแม่") == "พระราชบัญญัติ ก. พ.ศ. 2560 มาตรา 5"

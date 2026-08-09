@@ -139,6 +139,16 @@ KEEP_PARAGRAPH = True
 _OPERATIVE = re.compile(r"ดังต่อไปนี้|ต่อไปนี้|(?:ข้อ|มาตรา)\s*1\s+[ก-๙]")
 
 
+def is_constitution(law: str) -> bool:
+    """Whether a named act is the Constitution, which is nobody's parent.
+
+    Exposed because the model needs the same answer the preamble scan already
+    has: it named the Constitution for two documents where the reference row is
+    a dash, and nothing between the answer and the cell knew any better.
+    """
+    return bool(_CONSTITUTION.search(law or ""))
+
+
 def has_no_parent(text: str) -> bool:
     """Kinds that are nobody's child, so silence here is a real answer.
 
