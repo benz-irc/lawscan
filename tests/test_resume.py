@@ -85,6 +85,20 @@ class TestAnswerWrite:
         assert stored["ok"] is False
         assert stored["error"] == "คำตอบไม่ใช่ JSON"
 
+    def test_the_model_that_answered_is_written_down(self, tmp_path):
+        """An answer whose model is unrecorded cannot be priced afterwards.
+
+        Two runs of the same forty documents on two different models is the
+        only way to know whether the cheaper one is good enough, and the
+        comparison is only worth reading if each side is priced at its own
+        rates.
+        """
+        answer = Answer(question="identity", document="100001", ok=True,
+                        model="gemini-3.5-flash-lite")
+        answer.write(tmp_path)
+        stored = json.loads((tmp_path / "identity.json").read_text(encoding="utf-8"))
+        assert stored["model"] == "gemini-3.5-flash-lite"
+
     def test_a_success_replaces_an_earlier_failure(self, tmp_path):
         bad = Answer(question="identity", document="100001", ok=False)
         bad.write(tmp_path)

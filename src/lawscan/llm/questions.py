@@ -31,20 +31,28 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
 #: does not need the middle of a ninety-page act.
 IDENTITY = Question(
     name="identity",
-    fills=("ชื่อกฎหมาย", "ประเภทกฎหมาย", "หน่วยงานกำกับ", "องค์กรปกครองส่วนท้องถิ่น"),
+    fills=("หน่วยงานกำกับ", "องค์กรปกครองส่วนท้องถิ่น"),
     chars=6_000,
     schema=_obj(
         {
-            "title": _STRING,
-            "lawType": _STRING,
             "agencies": _STRINGS,
             "localGovernment": _STRING,
-            "province": _STRING,
-            "districts": _STRINGS,
         },
-        ["title", "lawType"],
+        ["agencies"],
     ),
 )
+# Four fields used to be asked here and are not any more, because the rules
+# answer them and ``Row.put`` discarded every model answer for them anyway —
+# the corpus was paying for four cells per document that nothing read.
+#
+#   title      rules/title.py  94.2% against the model's 90.0%
+#   lawType    rules/kind.py   97%, and beat the model on 299 of 300
+#   province   rules/places.py won 240/240
+#   districts  rules/places.py won 240/240
+#
+# Only ``title`` cost anything to remove: the rule stays silent on 6 of the
+# 240 and the model was right about 2 of those, so the column goes from 95.0%
+# to 94.2%. The other three were free.
 
 #: Which law empowers this one. Lives in the preamble; the rest of the document
 #: does not mention it again.
@@ -70,24 +78,22 @@ PARENT = Question(
 AUDIENCE = Question(
     name="audience",
     fills=("กลุ่มเป้าหมาย",),
-    # Both ways of writing the same reading, in one answer.
+    # One field, because one of them reaches the CSV.
     #
-    # ``merged`` joins closely-related groups with "และ", which is how the
-    # reference file writes 14 of its 40. ``split`` gives one group per item,
-    # which is what the operator asked for: "และ" reads as a single group
-    # meeting both conditions when it is two groups meeting one each, and a
-    # person opening the file cannot tell which one is theirs.
-    #
-    # Asking for both costs a few dozen output tokens and settles the question
-    # with a measurement instead of a preference. Which one reaches the CSV is
-    # chosen at run time; the other stays in the answer file, so switching is
-    # a rebuild from saved answers and not another hour of model calls.
+    # A ``merged`` field sat beside this one, joining closely-related groups
+    # with "และ" the way the reference file writes 14 of its 40. It was asked
+    # for so the two could be scored against each other rather than argued
+    # about; the argument is over. "และ" reads as a single group meeting both
+    # conditions when it is two groups meeting one each, and a person opening
+    # the file cannot tell which one is theirs — so ``split`` is the answer,
+    # and ``merged`` was 4.0% of the run's output tokens, produced on every
+    # document and discarded on every document.
     #
     # There is deliberately no third field. A ``roles`` field once sat here,
     # described as supporting detail and filling no column, and it was where a
     # correctly identified group went to be dropped — document 100014 bound
     # three, the model found three, two reached the CSV.
-    schema=_obj({"merged": _STRING, "split": _STRINGS}, ["merged", "split"]),
+    schema=_obj({"split": _STRINGS}, ["split"]),
     # Who is bound is stated in the opening and confirmed by the closing
     # provisions; the schedule of addresses in between says nothing about it.
     chars=8_000,

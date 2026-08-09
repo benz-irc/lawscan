@@ -27,10 +27,29 @@ import sys
 from pathlib import Path
 
 
-def _pdfs(target: Path) -> list[Path]:
-    if target.is_dir():
-        return sorted(target.glob("*.pdf"))
-    return [target]
+def _pdfs(targets: list[Path]) -> list[Path]:
+    """Every PDF named by the arguments, each one once, in the order given.
+
+    Folders expand; files stand for themselves. Taking a list rather than one
+    path is what lets a shell glob through — ``lawscan scan pdfs/1000*.pdf`` is
+    the obvious way to run ten documents, and before this it was an argparse
+    error that sent you off to build a folder of symlinks instead.
+
+    Duplicates are dropped because ``pdfs pdfs/100001.pdf`` is a reasonable
+    thing to type and paying twice for one document is not a reasonable thing
+    to answer with. A named file that does not exist is returned anyway: the
+    reader reports it against the document it belongs to, which is more use
+    than a failure here that names no document at all.
+    """
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for target in targets:
+        for path in sorted(target.glob("*.pdf")) if target.is_dir() else [target]:
+            key = path.resolve() if path.exists() else path.absolute()
+            if key not in seen:
+                seen.add(key)
+                found.append(path)
+    return found
 
 
 def _ocr(args: argparse.Namespace) -> int:
@@ -55,7 +74,8 @@ def _ocr(args: argparse.Namespace) -> int:
         notes=[f"{written} ไฟล์ .txt สำหรับอ่าน · {written} ไฟล์ .json สำหรับขั้นถัดไป"],
         next_steps=[
             ("เปิดดู", f"open {args.into}"),
-            ("รันกฎ", f"lawscan scan {args.path} --text {args.into} --no-llm --out out/r.csv"),
+            ("รันกฎ", f"lawscan scan {' '.join(str(p) for p in args.path)}"
+                      f" --text {args.into} --no-llm --out out/r.csv"),
             ("รันทั้งงาน", f"lawscan etl --text {args.into}"),
         ],
     ))
@@ -161,7 +181,6 @@ def _scan(args: argparse.Namespace) -> int:
         skip_done=args.skip_done,
         text_from=args.text,
         batch=args.batch,
-        audience=args.audience,
     )
     if code == 0:
         print(report(
@@ -185,6 +204,26 @@ def _diff(args: argparse.Namespace) -> int:
         return 2
     result = compare(args.expected, args.ours)
     print(score_table(result, examples=args.examples))
+
+    # The score says which columns are wrong. This says which of them are
+    # wrong because the pipeline broke the answer rather than because the
+    # model read the document differently — printed every time, because the
+    # two it was written for were both found by a person reading the sheet.
+    from lawscan import defects, sheet
+    from lawscan.diff import UNSCORED
+    from lawscan.export.columns import COLUMNS
+
+    found = defects.scan(
+        sheet.by_document(args.expected)[1],
+        sheet.by_document(args.ours)[1],
+        COLUMNS,
+        skip=UNSCORED,
+    )
+    if found.mechanical_cells or args.defects:
+        print()
+        print(defects.report(found) if args.defects else
+              f"⚠ {found.mechanical_cells:,} ช่องที่ผิดมีลายเซ็นของบั๊กในโค้ด"
+              f" — ดูรายละเอียดด้วย lawscan diff {args.ours} --defects")
     if args.out:
         from lawscan.diff import write_comparison
         from lawscan.where import report
@@ -196,6 +235,70 @@ def _diff(args: argparse.Namespace) -> int:
             notes=["กรอง ชนิด = ค่าเดียว ก่อน — นั่นคือของที่ผิดจริงและแก้ได้"],
             next_steps=[("เปิดดู", f"open {args.out}")],
         ))
+    if args.xlsx:
+        from lawscan.export.workbook import write as write_workbook
+        from lawscan.where import report
+
+        tally = write_workbook(
+            args.expected, args.ours, args.xlsx, workdir=args.workdir
+        )
+        print(report(
+            f"ตรง {tally.exact:,} · ใกล้เคียง {tally.partial:,} · ไม่ตรง {tally.wrong:,}"
+            f"  (จาก {tally.scored:,} ช่องที่นับ)",
+            [args.xlsx],
+            notes=[
+                "แผ่น สรุป บอกว่าช่องที่นับว่าตรง ตรงเพราะอะไร — "
+                "เว้นวรรค เลขไทย OCR หรือลำดับรายการ",
+                "แผ่น รายช่อง กรองคอลัมน์ ผล = ไม่ตรง ก่อน",
+            ],
+            next_steps=[("เปิดดู", f"open {args.xlsx}")],
+        ))
+    return 0
+
+
+def _row(args: argparse.Namespace) -> int:
+    """One document against its row in the reference, worst cell first.
+
+    The loop this exists for: read the row, change one sentence in a prompt,
+    re-ask that document alone, read the row again. ``--ask`` does the middle
+    step so the three are one command instead of three.
+    """
+    from lawscan.rowcheck import report_rows, worst
+
+    if not args.expected.exists():
+        print(f"ไม่พบไฟล์ที่คาดหวัง: {args.expected}", file=sys.stderr)
+        return 2
+
+    ours = args.ours
+    if args.ask:
+        from datetime import datetime
+
+        from lawscan.pipeline import scan
+
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        here = args.into / f"row-{stamp}"
+        ours = here / "result.csv"
+        paths = [args.pdfs / f"{number}.pdf" for number in args.documents]
+        missing = [p for p in paths if not p.exists()]
+        if missing:
+            print(f"ไม่พบไฟล์ PDF: {', '.join(p.name for p in missing)}", file=sys.stderr)
+            return 2
+        code = scan(paths, out=ours, workdir=here / "documents", only=args.only,
+                    text_from=args.text, batch=min(len(paths), 8))
+        if code != 0:
+            return code
+        print(f"ถามใหม่แล้ว เก็บที่ {here}\n")
+
+    if not ours.exists():
+        print(f"ไม่พบไฟล์ผลลัพธ์: {ours}", file=sys.stderr)
+        return 2
+
+    documents = args.documents
+    if not documents:
+        documents = [number for number, _ in worst(args.expected, ours, args.limit)]
+        print(f"ฉบับที่ห่างที่สุด {len(documents)} ฉบับ\n")
+
+    print(report_rows(args.expected, ours, documents, show_all=args.all))
     return 0
 
 
@@ -236,7 +339,6 @@ def _etl(args: argparse.Namespace) -> int:
         fresh=args.fresh,
         text=args.text,
         batch=args.batch,
-        audience=args.audience,
     )
 
 
@@ -261,7 +363,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     def common(p: argparse.ArgumentParser) -> None:
-        p.add_argument("path", type=Path, help="ไฟล์ PDF หรือโฟลเดอร์")
+        p.add_argument("path", type=Path, nargs="+", metavar="PATH",
+                       help="ไฟล์ PDF หรือโฟลเดอร์ ใส่ได้หลายอัน")
         p.add_argument("--no-ocr", action="store_true", help="ข้ามหน้าที่ไม่มีชั้นข้อความ")
 
     p_etl = sub.add_parser("etl", help="รันทั้งงาน: PDF → CSV → เทียบผล")
@@ -277,8 +380,6 @@ def main(argv: list[str] | None = None) -> int:
                        help="ที่เก็บข้อความ แปลงให้เองถ้ายังไม่มี (ค่าเริ่มต้น text)")
     p_etl.add_argument("--no-text-cache", dest="text", action="store_const", const=None,
                        help="อ่าน PDF ใหม่ทุกครั้ง ไม่ใช้ข้อความที่เก็บไว้")
-    p_etl.add_argument("--audience", choices=("split", "merged"), default="split",
-                       help="กลุ่มเป้าหมายลง CSV แบบไหน (ค่าเริ่มต้น split)")
     p_etl.add_argument("--batch", type=int, default=1, metavar="N",
                        help="ทำพร้อมกันครั้งละ N ฉบับ (ค่าเริ่มต้น 1)")
     p_etl.add_argument("--no-ocr", action="store_true")
@@ -318,8 +419,6 @@ def main(argv: list[str] | None = None) -> int:
                         help="กฎอย่างเดียว ไม่เรียกโมเดล ไม่เสียเงิน")
     p_scan.add_argument("--reuse", action="store_true",
                         help="ใช้คำตอบโมเดลที่บันทึกไว้แล้ว รันเฉพาะกฎใหม่")
-    p_scan.add_argument("--audience", choices=("split", "merged"), default="split",
-                       help="กลุ่มเป้าหมายลง CSV แบบไหน (ค่าเริ่มต้น split)")
     p_scan.add_argument("--batch", type=int, default=1, metavar="N",
                         help="ทำพร้อมกันครั้งละ N ฉบับ")
     p_scan.add_argument("--text", type=Path, metavar="DIR", default=Path("text"),
@@ -337,8 +436,31 @@ def main(argv: list[str] | None = None) -> int:
     p_diff.add_argument("ours", type=Path, nargs="?", default=Path("out/result.csv"))
     p_diff.add_argument("--expected", type=Path, default=Path("data/expected.csv"))
     p_diff.add_argument("--examples", action="store_true", help="แสดงตัวอย่างที่ไม่ตรง")
+    p_diff.add_argument("--defects", action="store_true",
+                        help="จัดกลุ่มช่องที่ผิดตามลายเซ็น แยกบั๊กโค้ดออกจากโมเดลอ่านผิด")
     p_diff.add_argument("--out", type=Path, help="เขียนไฟล์เทียบทีละช่อง")
+    p_diff.add_argument("--xlsx", type=Path,
+                        help="เขียนสมุดงาน Excel: แผ่นสรุป กับ แผ่นรายช่อง")
+    p_diff.add_argument("--workdir", type=Path,
+                        help="โฟลเดอร์หลักฐานรายฉบับ ใช้บอกที่มาของแต่ละช่อง")
     p_diff.set_defaults(run=_diff)
+
+    p_row = sub.add_parser("row", help="ดูผลรายฉบับเทียบกับเฉลย ช่องที่ผิดขึ้นก่อน")
+    p_row.add_argument("documents", nargs="*", metavar="เลขเอกสาร",
+                       help="เช่น 100006 100021 · ไม่ใส่ = เอาฉบับที่ห่างที่สุด")
+    p_row.add_argument("--ask", action="store_true",
+                       help="ถามโมเดลใหม่เฉพาะฉบับเหล่านี้ก่อนเทียบ")
+    p_row.add_argument("--only", help="ถามเฉพาะคำถามนี้ คั่นด้วยจุลภาค (ใช้กับ --ask)")
+    p_row.add_argument("--ours", type=Path, default=Path("out/result.csv"),
+                       help="CSV ที่จะเทียบ ถ้าไม่ได้ใช้ --ask")
+    p_row.add_argument("--expected", type=Path, default=Path("data/expected.csv"))
+    p_row.add_argument("--pdfs", type=Path, default=Path("pdfs"))
+    p_row.add_argument("--text", type=Path, default=Path("text"))
+    p_row.add_argument("--into", type=Path, default=Path("out"),
+                       help="ที่เก็บรอบที่ถามใหม่ (ค่าเริ่มต้น out)")
+    p_row.add_argument("--limit", type=int, default=5,
+                       help="ไม่ระบุเลขเอกสาร จะเอากี่ฉบับที่ห่างที่สุด")
+    p_row.set_defaults(run=_row)
 
     p_rec = sub.add_parser("record", help="เก็บผลรันนี้ไว้เป็นโฟลเดอร์")
     p_rec.add_argument("ours", type=Path, nargs="?", default=Path("out/result.csv"))

@@ -66,7 +66,6 @@ def run(
     fresh: bool = False,
     text: Path | None = None,
     batch: int = 1,
-    audience: str = "split",
     stamp: str | None = None,
 ) -> int:
     """Every PDF under ``pdfs`` to a kept run under ``into``.
@@ -122,7 +121,6 @@ def run(
         skip_done=None if fresh else [into],
         text_from=text,
         batch=batch,
-        audience=audience,
     )
     if code != 0:
         return code
