@@ -271,3 +271,13 @@ def judge(document: Document, row: Row) -> Verdict:
         if found is not None:
             verdict.findings.append(found)
     return verdict
+
+
+def as_cell(score: float) -> str:
+    """The confidence column as the operator writes it: a whole percentage.
+
+    Their first corpus wrote ``1`` and their second writes ``100%``. Both are
+    the same number and only one can go in the file; this follows the newer
+    one, because that is the convention the corpus is being extended under.
+    """
+    return f"{score * 100:g}%"
