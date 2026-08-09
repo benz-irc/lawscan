@@ -12,6 +12,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# The reference arrives as a spreadsheet and the comparison goes back out as
+# one. Optional because nothing in the pipeline itself needs it: `lawscan diff`
+# without `--xlsx` reads and writes CSV and never imports this.
+xlsx = ["openpyxl>=3.1"]
+# GPT, DeepSeek and Kimi all speak the OpenAI chat API, so one package
+# reaches all three. Optional because Gemini needs none of it.
+openai = ["openai>=1.60"]
 
 [project.scripts]
 lawscan = "lawscan.cli:main"

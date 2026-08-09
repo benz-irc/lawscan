@@ -66,9 +66,13 @@ lawscan scan pdfs/ --out out/r.csv --workdir out/     # pipeline ดิบ ค�
 lawscan scan pdfs/ --no-llm --out out/r.csv           # กฎอย่างเดียว ฟรี
 lawscan scan pdfs/ --reuse  --out out/r.csv           # ประกอบใหม่จากคำตอบเดิม
 
+LAWSCAN_MODEL=gpt-5-nano lawscan scan pdfs/  # เปลี่ยนโมเดล/ค่าย (gpt · deepseek · kimi · gemini)
+LAWSCAN_EFFORT=minimal ...                 # เฉพาะ gpt-5/o-series: คุมโทเคนคิด
+
 lawscan diff out/r.csv                     # เทียบ
 lawscan diff out/r.csv --examples          # พร้อมตัวอย่างที่ไม่ตรง
 lawscan diff out/r.csv --out cells.csv     # เขียนไฟล์เทียบทีละช่อง
+lawscan diff out/r.csv --xlsx cmp.xlsx --workdir out/   # สมุดงาน: แผ่นสรุป + แผ่นรายช่อง
 
 lawscan record out/r.csv --note "แก้อะไร"  # เก็บผลรอบนี้เป็นโฟลเดอร์
 ```
