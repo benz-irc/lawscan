@@ -272,3 +272,74 @@ _EXPLICIT_START = re.compile(
 def states_its_own_start(text: str) -> bool:
     """Whether the document names the day it starts, rather than implying it."""
     return _EXPLICIT_START.search(text) is not None
+
+
+#: A law that runs for a stated period says so as a range, and the range has to
+#: be about the law. ``ตั้งแต่วันที่ … ถึงวันที่ …`` on its own is the commonest
+#: sentence shape in the corpus and almost never an expiry: it dates the thing
+#: the instrument is *about* — the donations that qualify for the exemption, the
+#: machinery bought in the window, the conduct a judgment describes. Fourteen of
+#: the sixteen documents this fired on were that, against two real expiries.
+#:
+#: So the range only counts when the words in front of it say the *instrument*
+#: is what runs from one date to the other. That costs the two real ones — they
+#: word it differently — and removes thirteen wrong dates and the thirteen
+#: wrong ``สิ้นผล`` statuses that followed from them.
+_RANGE_END = re.compile(
+    r"(?:ใช้บังคับ|มีผล)(?:ใช้บังคับ)?\s*ตั้งแต่วันที่.{0,60}?ถึงวันที่\s*(\d{1,2})\s*"
+    r"(" + "|".join(THAI_MONTHS) + r")\s*(?:พ\.ศ\.\s*)?(\d{4})",
+    re.DOTALL,
+)
+
+
+def stated_end_date(text: str) -> date | None:
+    """The day this instrument stops applying, when it states one."""
+    match = _RANGE_END.search((text or "").replace("\n", " "))
+    if not match:
+        return None
+    day, month, year = match.groups()
+    try:
+        return date(int(year) - 543, THAI_MONTHS.index(month) + 1, int(day))
+    except ValueError:
+        return None
+
+
+def status(end: date | None, *, today: date | None = None) -> str:
+    """``สิ้นผล`` once the stated end date has passed, else ``บังคับใช้``.
+
+    Read against the clock rather than frozen at extraction time: the same
+    document is in force in March and expired in April, and a column that says
+    otherwise is wrong the moment it ages.
+    """
+    if end is None:
+        return "บังคับใช้"
+    return "สิ้นผล" if end < (today or date.today()) else "บังคับใช้"
+
+
+#: Every page of a Gazette instrument carries its own number in the footer, so
+#: the pages an instrument occupies can be read rather than guessed.
+_FOOTER_PAGE = re.compile(r"หน้า\s*([0-9๐-๙]{1,4})")
+
+
+def page_span(pages: list[int]) -> str:
+    """``13-14`` for an instrument spanning two pages, ``19`` for one page.
+
+    A document printed on one page repeats that page number in every footer it
+    has, which is why this compares the ends rather than counting them.
+    """
+    numbers = sorted(set(n for n in pages if n))
+    if not numbers:
+        return ""
+    if numbers[0] == numbers[-1]:
+        return str(numbers[0])
+    return f"{numbers[0]}-{numbers[-1]}"
+
+
+def pages_of(texts: list[str]) -> list[int]:
+    """The page number printed in each page's footer, where there is one."""
+    found = []
+    for text in texts:
+        matches = _FOOTER_PAGE.findall(thai_to_arabic_digits(text or ""))
+        if matches:
+            found.append(int(matches[-1]))
+    return found

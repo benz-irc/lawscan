@@ -116,6 +116,46 @@ def scope(text: str, provinces: list[str], *, narrative: bool = False) -> Place:
 
     clean = hide_citations(text)
     found = read("", clean, provinces)
+
+    # The register finds the districts; the rest of this function decides the
+    # province. An instrument can list districts in two provinces — an
+    # irrigation canal does not stop at a boundary — and the operator writes
+    # both, so both are written here.
+    from lawscan.rules import districts as register
+
+    listed = register.read_all(clean)
+    if listed and found.province != _BANGKOK:
+        # The schedule rule still applies: a document that enumerates three or
+        # more tambon addresses is a province-wide plan, and the operator
+        # records the province with the district cell left empty.
+        addresses = set(_TAMBON_ADDRESS.findall(clean))
+        names = [name for name, _ in listed]
+        if len(names) >= _SCHEDULE:
+            names = [name for name in names if name not in addresses]
+        provinces_found: list[str] = []
+        for _, province in listed:
+            if province not in provinces_found:
+                provinces_found.append(province)
+        if found.province and found.province not in provinces_found:
+            provinces_found.insert(0, found.province)
+        elif found.province:
+            provinces_found.remove(found.province)
+            provinces_found.insert(0, found.province)
+        return Place(province=", ".join(provinces_found), districts=tuple(names))
+
+    if found.province is None:
+        # The document may name a district and never name its province — a
+        # notice about ศาลแขวงเชียงดาว is 812 characters and does not contain
+        # the word เชียงใหม่. A person fills both cells anyway, from a table,
+        # so the table is consulted here too. Only past the narrative guard
+        # above: a judgment printing the address of a party is not a document
+        # about that place.
+        from lawscan.rules import districts
+
+        named = districts.read_marked(clean)
+        if named:
+            district, province = named
+            return Place(province=province, districts=(district,))
     if found.province == _BANGKOK:
         return Place(province=_BANGKOK)
     if len(found.districts) < _SCHEDULE:
@@ -311,4 +351,20 @@ def read(
         ):
             found.append(name)
 
-    return Place(province=province, districts=tuple(found))
+    return Place(province=province, districts=tuple(_real(found, province)))
+
+
+def _real(names: list[str], province: str | None) -> list[str]:
+    """Only names the register of districts knows.
+
+    The stop-lists above were built one false positive at a time and cannot
+    keep up with OCR: ``ลถานที่ราชการ`` and ``หัวเทร`` both arrived as
+    districts of นครศรีธรรมราช. A register of the 872 that exist answers the
+    question directly. Bangkok is exempt because its subdivisions are เขต and
+    are not in the register at all.
+    """
+    if province == "กรุงเทพมหานคร":
+        return names
+    from lawscan.rules import districts
+
+    return [name for name in names if districts.province_of(name)]
