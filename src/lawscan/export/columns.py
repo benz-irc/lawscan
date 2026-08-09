@@ -88,6 +88,25 @@ def _spaced(title: str) -> str:
     return title
 
 
+#: The corpus is numbered from here: document 100001 is the operator's row 1
+#: and 103424 is their row 3424, unbroken across all 3,424 of them.
+#:
+#: ``ลำดับ`` therefore belongs to the document and not to the run. Numbering by
+#: position in the output looked identical on a full pass and was wrong on
+#: every partial one: a twelve-document rescan numbered them 1–12 against a
+#: reference that numbers them by their place in the corpus, losing one exact
+#: cell per document. That turned a +8 result into −4 and nearly buried it.
+FIRST_DOCUMENT = 100_000
+
+
+def place_in_corpus(document: str, fallback: int) -> str:
+    """Where this document sits in the operator's own numbering."""
+    number = (document or "").strip()
+    if number.isdigit() and int(number) > FIRST_DOCUMENT:
+        return str(int(number) - FIRST_DOCUMENT)
+    return str(fallback)
+
+
 def to_dict(row: Row, order: int) -> dict[str, str]:
     """One row as the export writes it."""
     out: dict[str, str] = {}
@@ -98,7 +117,7 @@ def to_dict(row: Row, order: int) -> dict[str, str]:
         if not value and column in NONE_IS_AN_ANSWER:
             value = NONE
         out[column] = value
-    out["ลำดับ"] = str(order)
+    out["ลำดับ"] = place_in_corpus(row.document, order)
     return out
 
 

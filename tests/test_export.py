@@ -193,3 +193,34 @@ class TestNothingFoundIsNotAnAnswer:
         apply_rules(row, {"บทลงโทษ": "-", "ประเภทกฎหมาย": "ประกาศ"})
         assert row.value("บทลงโทษ") == "โทษทางอาญา"
         assert row.value("ประเภทกฎหมาย") == "ประกาศ"
+
+
+class TestTheRowNumberBelongsToTheDocument:
+    """``ลำดับ`` numbered by output position was wrong on every partial run.
+
+    The operator numbers their corpus from 100001, unbroken to 103424, and
+    their ``ลำดับ`` is that number minus 100000. Numbering by position in the
+    file agrees on a full pass and disagrees on every subset: a twelve-document
+    rescan produced 1–12 and lost one exact cell per document, which turned a
+    +8 comparison into −4.
+    """
+
+    def test_it_comes_from_the_document_number(self):
+        from lawscan.export.columns import place_in_corpus
+
+        assert place_in_corpus("100001", 999) == "1"
+        assert place_in_corpus("100240", 3) == "240"
+        assert place_in_corpus("103424", 1) == "3424"
+
+    def test_a_subset_keeps_the_corpus_numbering(self):
+        from lawscan.export.columns import to_dict
+        from lawscan.merge import Row
+
+        # Second row of a two-document rescan, but document 135 of the corpus.
+        assert to_dict(Row(document="100135"), 2)["ลำดับ"] == "135"
+
+    def test_a_document_named_otherwise_falls_back_to_position(self):
+        from lawscan.export.columns import place_in_corpus
+
+        assert place_in_corpus("draft-a", 7) == "7"
+        assert place_in_corpus("", 7) == "7"
