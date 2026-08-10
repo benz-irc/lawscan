@@ -320,6 +320,16 @@ def status(end: date | None, *, today: date | None = None) -> str:
 #: the pages an instrument occupies can be read rather than guessed.
 _FOOTER_PAGE = re.compile(r"หน้า\s*([0-9๐-๙]{1,4})")
 
+#: What a real footer always carries beside the page number.
+_MASTHEAD = "ราชกิจจานุเบกษา"
+
+#: How close to the end of a page its footer sits. The words ``หน้า ๒๐`` also
+#: appear in the body of a document that cites another one — 100924 page 3
+#: says them nine times, the last 747 characters from the end, and reading it
+#: as a footer turns a three-page instrument into ``หน้า 20-40``. On the whole
+#: corpus this window removes those without costing a single real footer.
+_FOOTER_TAIL = 120
+
 
 def page_span(pages: list[int]) -> str:
     """``13-14`` for an instrument spanning two pages, ``19`` for one page.
@@ -336,10 +346,22 @@ def page_span(pages: list[int]) -> str:
 
 
 def pages_of(texts: list[str]) -> list[int]:
-    """The page number printed in each page's footer, where there is one."""
+    """The page number printed in each page's footer, where there is one.
+
+    The number never stands alone. The Gazette prints it as one line with the
+    volume and the date — ``หน้า ๑๔ เล่ม ๑๓๙ ตอนพิเศษ ๑๓๖ ง ราชกิจจานุเบกษา
+    ๑๕ มิถุนายน ๒๕๖๕`` — so the masthead beside it is what tells a footer from
+    a fee schedule that happens to end ``๕ บาท/หน้า ๗. ค่าพิมพ์``. Asking for
+    both takes the corpus from 24 instruments claiming more pages than they
+    have to none, and costs one real footer.
+    """
     found = []
     for text in texts:
-        matches = _FOOTER_PAGE.findall(thai_to_arabic_digits(text or ""))
-        if matches:
-            found.append(int(matches[-1]))
+        page = thai_to_arabic_digits(text or "")
+        for match in reversed(list(_FOOTER_PAGE.finditer(page))):
+            if len(page) - match.start() > _FOOTER_TAIL:
+                break
+            if _MASTHEAD in page[match.start():]:
+                found.append(int(match.group(1)))
+                break
     return found
