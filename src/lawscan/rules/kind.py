@@ -26,6 +26,14 @@ KINDS: tuple[str, ...] = (
     "พระราชกฤษฎีกา",
     "พระราชบัญญัติ",
     "กฎกระทรวง",
+    # A commission's own rules — ``กฎ ก.พ.``, ``กฎ ก.ตร.``, ``กฎ ก.ก.`` — and
+    # the Prime Minister's Office's. The sheet files all of them as ``กฎ``.
+    # Without them the earliest kind word on the page was the
+    # ``พระราชบัญญัติ`` of the authority clause, which named the act these
+    # instruments are issued *under* rather than what they are: 43 documents
+    # in the corpus, two of them in the operator's own 240.
+    "กฎ ก.",
+    "กฎสำนักนายกรัฐมนตรี",
     "ข้อบัญญัติ",
     "ข้อบังคับ",
     "ระเบียบ",
@@ -39,16 +47,29 @@ KINDS: tuple[str, ...] = (
 #: Supreme Court's political-office division in this corpus, and a ruling always
 #: the Constitutional Court — stated here rather than buried in a condition, so
 #: a corpus that widens shows up as a wrong cell instead of a silent guess.
-LONG_FORM: dict[str, str] = {
+_COURT: dict[str, str] = {
     "คำพิพากษา": "คำพิพากษาของศาลฎีกาแผนกคดีอาญา",
     "คำวินิจฉัย": "คำวินิจฉัยศาลรัฐธรรมนูญ",
 }
 
+#: These go the other way: the page writes the name out and the sheet keeps the
+#: bare word.
+_SHORT_FORM: dict[str, str] = {
+    "กฎ ก.": "กฎ",
+    "กฎสำนักนายกรัฐมนตรี": "กฎ",
+}
+
+#: What to file a document as, where that is not the word it uses.
+LONG_FORM: dict[str, str] = {**_COURT, **_SHORT_FORM}
+
 #: Types that recount what happened rather than lay down what must happen.
 #: Both the bare word and the long form, because either can be the answer.
-NARRATIVE: frozenset[str] = frozenset(
-    {"คำพิพากษา", "คำวินิจฉัย", *LONG_FORM.values()}
-)
+#:
+#: Built from the court types alone, not from every rewriting: reading it off
+#: ``LONG_FORM`` was fine while the only rewritings *were* the court ones, and
+#: the moment ``กฎ`` was added the title rule started abstaining on it — a rule
+#: that recites is a fact about judgments, not about being written differently.
+NARRATIVE: frozenset[str] = frozenset({*_COURT, *_COURT.values()})
 
 #: How far in to look. The type is in the masthead; a mention of some other
 #: instrument in the body is a citation, not a self-description.
@@ -78,15 +99,50 @@ def _forgiving(text: str) -> str:
     return _DAMAGE.sub("", text or "").replace("ำ", "า")
 
 
-def read(text: str) -> str:
-    """The document's own name for itself, or nothing if it does not give one."""
-    head = _forgiving(text[:HEAD])
+def _fold(text: str) -> tuple[str, list[int]]:
+    """The folded text, and where each of its characters came from.
+
+    Folding drops characters, so an offset found in the folded text does not
+    point at the same place in the original. Anything that needs to hand a
+    position back to the caller — where the title starts, say — needs the trail
+    back as well.
+    """
+    kept: list[str] = []
+    where: list[int] = []
+    for index, char in enumerate(text or ""):
+        if _DAMAGE.match(char):
+            continue
+        kept.append("า" if char == "ำ" else char)
+        where.append(index)
+    return "".join(kept), where
+
+
+def _earliest(head: str):
+    """The kind word that starts first, longest at a tie, or ``None``.
+
+    Earliest first, and at the same position the longest — otherwise
+    พระราชบัญญัติ wins over พระราชบัญญัติประกอบรัฐธรรมนูญ, which begins at the
+    same character and is a different instrument.
+    """
     found = [(head.find(k), -len(kind), kind)
              for kind in KINDS if (k := _forgiving(kind)) in head]
-    if not found:
-        return ""
-    # Earliest first, and at the same position the longest — otherwise
-    # พระราชบัญญัติ wins over พระราชบัญญัติประกอบรัฐธรรมนูญ, which begins at the
-    # same character and is a different instrument.
-    _, _, kind = min(found)
-    return LONG_FORM.get(kind, kind)
+    return min(found) if found else None
+
+
+def read(text: str) -> str:
+    """The document's own name for itself, or nothing if it does not give one."""
+    earliest = _earliest(_forgiving(text[:HEAD]))
+    return LONG_FORM.get(earliest[2], earliest[2]) if earliest else ""
+
+
+def position(text: str) -> int:
+    """Where the document names itself, as an offset into ``text``, or -1.
+
+    The instrument's title starts at that word, which is what makes this worth
+    reporting: anything printed in front of it — the Gazette masthead, the
+    letters a scanner invents around a crest — belongs to the page rather than
+    to the law.
+    """
+    head, where = _fold(text[:HEAD])
+    earliest = _earliest(head)
+    return where[earliest[0]] if earliest else -1

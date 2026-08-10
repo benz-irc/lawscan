@@ -78,9 +78,38 @@ _CASE_NUMBER = re.compile(r"คดีหม[าำ]ยเลข|อม\.\s*\d+/\
 _YEAR = re.compile(r"พ\.ศ\.\s*[\d๐-๙]{4}(?!\s*\))")
 
 #: The Gazette's running header, when it survived onto the front of the text.
-_MASTHEAD = re.compile(
-    r"^หน้า\s*\d+\s*เล่ม\s*\S+\s*ตอน\S*\s*\S+\s*ราชกิจจานุเบกษา\s*\S+\s*\S+\s*\d+\s*"
+#:
+#: This used to be a shape — ``หน้า ๑๕ เล่ม ๑๕๑ ตอนที่ ๓๑ ราชกิจจานุเบกษา …``
+#: — and the shape never once matched, on clean text or damaged: the real
+#: masthead puts the section letter between the issue and the paper's name
+#: (``ตอนพิเศษ ๒๕๑ ง ราชกิจจานุเบกษา``). Nobody saw it because page one of a
+#: clean PDF carries no masthead. OCR reads the printed one, so 591 documents
+#: arrived with a title that opened ``หน้า ๑๕ เล่ม ๑๕๑ …``.
+#:
+#: What replaced it does not try to describe the masthead — OCR renders it a
+#: different way on every page (``ตอนที``, ``Maun al``, ``๒ ตุลา``). It uses
+#: the one thing that holds: a title begins at the word the instrument calls
+#: itself, and :func:`kind.position` already reads that vocabulary through the
+#: same damage.
+_MASTHEAD = "ราชกิจจานุเบกษา"
+
+#: How far in the masthead can be and still be the masthead rather than a
+#: mention of the Gazette inside the title.
+_MASTHEAD_WINDOW = 160
+
+#: What a scanner leaves behind where a crest, a seal or a signature was:
+#: ``ประกาศสำนักงานศาลปกครอง a 17 6 aa al 17 a 0 1 al A vy 17 Ca vy เรื่อง …``.
+#: Only runs are removed, and only runs carrying a letter — a lone ``3`` is
+#: ``ฉบับที่ ๓`` and ``GHPs`` is the name of a standard. 122 titles in the
+#: corpus carry one; none of the operator's 240 do, because their front pages
+#: were never scanned.
+_SCANNER_NOISE = re.compile(
+    r"(?<![^\s])(?:[^\sก-๙]{1,3}\s+){1,}[^\sก-๙]{1,3}(?![^\s])"
 )
+
+#: A run has to hold a letter to be noise. Digits alone are a date or an
+#: amendment number.
+_HAS_A_LETTER = re.compile(r"[A-Za-z]")
 
 #: How far in to look. A title that has not ended within this many characters
 #: is not a title this rule can read.
@@ -136,7 +165,7 @@ def read(text: str) -> str:
     if not text:
         return ""
 
-    head = _MASTHEAD.sub("", " ".join(text[:_HEAD].split()))
+    head = _without_noise(_after_masthead(" ".join(text[:_HEAD].split())))
     if kind.read(text) in kind.NARRATIVE or _CASE_NUMBER.search(head):
         return _court_title(text, head) if COMPOSE_COURT_TITLES else ""
 
@@ -160,6 +189,23 @@ def read(text: str) -> str:
     if not _TOO_SHORT <= len(title) <= _TOO_LONG:
         return ""
     return title
+
+
+def _after_masthead(head: str) -> str:
+    """``head`` with the Gazette's own furniture taken off the front."""
+    printed = head.find(_MASTHEAD)
+    if not 0 <= printed < _MASTHEAD_WINDOW:
+        return head
+    begins = kind.position(head)
+    return head[begins:] if begins > printed else head
+
+
+def _without_noise(head: str) -> str:
+    """``head`` with the marks a scanner made around a crest taken out."""
+    cleaned = _SCANNER_NOISE.sub(
+        lambda m: "" if _HAS_A_LETTER.search(m.group()) else m.group(), head
+    )
+    return " ".join(cleaned.split())
 
 
 def _court_title(text: str, head: str) -> str:
