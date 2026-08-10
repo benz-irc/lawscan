@@ -44,6 +44,8 @@ class TestTheDocumentThatCausedThis:
             number = "100001"
             pages = ()
             unread_pages = ()
+            header_text = PREAMBLE
+            body_text = PREAMBLE
 
             def text(self):
                 return PREAMBLE

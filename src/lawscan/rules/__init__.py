@@ -131,7 +131,10 @@ def run_all(document: Document, *, law_type: str | None = None) -> dict[str, str
         if cited:
             found["กฎหมายแม่"] = ", ".join(cited)
 
-    header = gazette.parse(text)
+    # Read from the text layer where OCR replaced it: the header is numerals,
+    # a broken font leaves numerals alone, and OCR is the one that gets them
+    # wrong — it read the Gazette year as ๒๕๒๐ on every document it misread.
+    header = gazette.parse(document.header_text)
     if header:
         published = header.publish_date
         found["วันที่ประกาศ"] = str(published.day)
@@ -139,9 +142,12 @@ def run_all(document: Document, *, law_type: str | None = None) -> dict[str, str
         found["ปีที่ประกาศ"] = str(published.year + 543)
         # The pages the instrument occupies, not only the one it starts on:
         # every page carries its own number in the footer, and the operator
-        # cites the span.
+        # cites the span. The footer is Gazette furniture like the header, so
+        # it is read the same way — 100087's footers run 1..7 in the text
+        # layer and 1,2,3,5,5,2,3 once OCR has been over them, which turns a
+        # seven-page instrument into a five-page one.
         span = gazette.page_span(
-            gazette.pages_of([page.text for page in document.pages])
+            gazette.pages_of([page.layer or page.text for page in document.pages])
         ) or str(header.page)
         found["ข้อมูลแหล่งที่มา"] = (
             f"ราชกิจจานุเบกษา เล่ม {header.volume} "
@@ -163,7 +169,10 @@ def run_all(document: Document, *, law_type: str | None = None) -> dict[str, str
     if bound:
         found["กลุ่มเป้าหมาย"] = bound
 
-    place = places.scope(text, PROVINCES, narrative=stated in kind.NARRATIVE)
+    # Read from the body only: a map annex prints the districts around the
+    # area rather than the ones in it.
+    place = places.scope(document.body_text, PROVINCES,
+                         narrative=stated in kind.NARRATIVE)
     found["จังหวัด"] = place.province or NONE
     # Their sheet writes the district bare and never puts a Bangkok เขต here.
     found["อำเภอ"] = (

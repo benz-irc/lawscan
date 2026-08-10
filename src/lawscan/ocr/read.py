@@ -61,6 +61,30 @@ _MEANINGFUL_IMAGE = 40_000
 #: replacing it would trade one loss for another.
 MODES = ("text", "image")
 
+#: Sheets attached to an instrument to illustrate it: a map of the area, a
+#: schedule of rates. They name places and quantities that belong to the
+#: picture rather than to the law, and they say so on their first line.
+#: Sheets attached to an instrument to illustrate it, matched through the
+#: damage OCR does to their heading. The three spellings below are all the
+#: same two words off one corpus page each — ``แผนทีฑาย``, ``แผนทีท้าย``,
+#: ``แผนททาย`` — so the pattern asks for ``แผนท`` … ``าย`` and lets the middle
+#: be whatever the scanner saw.
+_ANNEX = re.compile(r"แผนท.{0,3}(?:าย|หมายเลข)|บัญช.{0,3}าย|มาตราสวน1")
+
+#: Tone marks are the first thing OCR loses, and ``ำ`` the first it confuses.
+_TONES = re.compile(r"[่-๋์]")
+
+#: Latin junk the scanner invents around a map caption — ``= ay a แผนที…`` —
+#: which would otherwise push the heading out of reach of the window below.
+_NOT_THAI = re.compile(r"[^ก-๙0-9]")
+
+#: How far into a page a marker may sit and still be its heading, counted in
+#: Thai characters. A map scale is quoted inside ordinary text 79 times
+#: against 9 as a caption; 100749 page 7 opens with an operative list of
+#: localities and mentions a scale further down, and dropping it costs a
+#: district the law really does cover.
+_HEADING = 40
+
 #: How little text makes a page "a picture with a caption" rather than "a page".
 #: Set from what the corpus actually contains: the uniform-regulation pages
 #: carry 120–160 characters of heading above a full-page illustration, and a
@@ -79,11 +103,30 @@ class Page:
     #: guards against is silent: a document can lose half its pages to images
     #: and reach the CSV looking complete.
     has_image: bool = False
+    #: What the text layer said, kept only when OCR replaced it.
+    #:
+    #: The two damages are complementary and neither source is better at both
+    #: jobs. A broken font destroys the Thai and leaves the numerals alone —
+    #: they are Latin digits and the substitution never reaches them. OCR
+    #: recovers the Thai and misreads the numerals: across the corpus it read
+    #: the Gazette year ``๒๕๖๖`` as ``๒๕๒๐`` every time it got it wrong, which
+    #: dated three documents to 1977.
+    #:
+    #: So both are kept. The body is read from whichever page won, and the
+    #: running header — volume, issue, page, publication date, five columns
+    #: that currently score 236-240 out of 240 — is read from the layer.
+    layer: str = ""
 
     @property
     def unread(self) -> bool:
         """A page whose content is in a picture nobody has read."""
         return self.has_image and len(self.text.strip()) < _CAPTION_ONLY
+
+    @property
+    def is_annex(self) -> bool:
+        """A map or schedule attached to the instrument rather than part of it."""
+        head = _NOT_THAI.sub("", _TONES.sub("", self.text[:400]).replace("ำ", "า"))
+        return bool(_ANNEX.search(head[:_HEADING]))
 
 
 @dataclass(slots=True)
@@ -104,6 +147,32 @@ class Document:
     def text(self, limit: int | None = None) -> str:
         joined = "\n\n".join(page.text for page in self.pages)
         return joined[:limit] if limit else joined
+
+    @property
+    def body_text(self) -> str:
+        """The document without the sheets that only illustrate it.
+
+        A map annex prints the districts *around* the area a law covers, and
+        the place rule reads every name it finds. While those sheets were
+        pictures nobody had read the two never met; reading them turned
+        ``วัดโบสถ์, เมืองพิษณุโลก`` into ``พิชัย`` — a district of the next
+        province, named on the map only because it borders the one the law is
+        about.
+
+        The sheets say what they are on their first line: ``แผนที่ท้าย…``,
+        ``มาตราส่วน 1:50000``. 285 pages of the corpus open that way.
+        """
+        return "\n\n".join(p.text for p in self.pages if not p.is_annex)
+
+    @property
+    def header_text(self) -> str:
+        """The document as the Gazette header should be read from it.
+
+        Identical to :meth:`text` except on pages OCR replaced, where the text
+        layer is used instead. Those pages have unreadable Thai and readable
+        numerals, and the header is numerals.
+        """
+        return "\n\n".join(page.layer or page.text for page in self.pages)
 
     @property
     def scanned_pages(self) -> int:
@@ -137,6 +206,7 @@ class Document:
                             "source": p.source,
                             "has_image": p.has_image,
                             "text": p.text,
+                            "layer": p.layer,
                         }
                         for p in self.pages
                     ],
@@ -154,7 +224,8 @@ def load(record: Path) -> Document:
     return Document(
         path=Path(stored["source_pdf"]),
         pages=[
-            Page(p["number"], p["text"], p["source"], has_image=p.get("has_image", False))
+            Page(p["number"], p["text"], p["source"],
+                 has_image=p.get("has_image", False), layer=p.get("layer", ""))
             for p in stored["pages"]
         ],
     )
@@ -205,7 +276,11 @@ def read(path: Path, *, ocr: bool = True, mode: str = "text") -> Document:
             source = "text-layer"
             pictured = _has_picture(page)
 
+            layer = ""
             if ocr and (len(raw.strip()) < _TEXT_LAYER_MIN or looks_garbled(raw)):
+                # Kept only when there was something to keep: a page whose
+                # layer was empty has no numerals to preserve.
+                layer = raw if raw.strip() else ""
                 raw = _recognise(page)
                 source = "ocr"
             elif ocr and mode == "image" and pictured:
@@ -215,7 +290,7 @@ def read(path: Path, *, ocr: bool = True, mode: str = "text") -> Document:
                     raw = f"{raw}\n{drawn}"
                     source = "text-layer+ocr"
 
-            pages.append(Page(index, raw, source, has_image=pictured))
+            pages.append(Page(index, raw, source, has_image=pictured, layer=layer))
 
     # The header is stripped after every page is read, not during, because
     # "keep the first one" means the first one in the document — and the first
@@ -382,3 +457,10 @@ def _strip_headers(pages: list[Page]) -> None:
         elif _RUNNING_HEADER.search(text):
             seen = True
         page.text = normalize_text(text)
+        # The layer gets the same treatment or it cannot be read either. A
+        # broken Gazette font writes its header in private-use codepoints —
+        # ``เล\uf70aม ๑๔๐`` — and ``normalize_text`` is what turns those into
+        # Thai. Skipping it left the layer holding a header no rule could see,
+        # which is the whole reason the layer is kept.
+        if page.layer:
+            page.layer = normalize_text(repair_swapped_sara_aa(page.layer))

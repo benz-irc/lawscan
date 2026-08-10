@@ -55,3 +55,52 @@ class TestLooksGarbled:
     def test_a_page_of_english_is_not_thai_and_says_so(self):
         english = "This Act may be cited as the Emergency Decree on Public Administration " * 2
         assert looks_garbled(english)
+
+
+class TestTheHeaderComesFromTheLayer:
+    """The two damages are complementary, so both sources are kept.
+
+    A broken font destroys the Thai and leaves the numerals — they are Latin
+    digits and the substitution never reaches them. OCR recovers the Thai and
+    misreads the numerals: re-extracting the corpus dated three documents to
+    1977, because it read the Gazette year ``๒๕๖๖`` as ``๒๕๒๐`` every time it
+    got it wrong. The header is numerals, so it is read from the layer.
+    """
+
+    def _document(self):
+        import pathlib
+
+        from lawscan.ocr.read import Document, Page
+
+        return Document(pathlib.Path("x/100087.pdf"), [
+            Page(1, "เล่ม 150 ตอนพิเศษ 251 ง ราชกิจจานุเบกษา 2 ตุลาคม 2520", "ocr",
+                 layer="เล่ม 140 ตอนพิเศษ 251 ง ราชกิจจานุเบกษา 6 ตุลาคม 2566"),
+            Page(2, "เนื้อความที่ OCR อ่านได้ดีกว่าชั้นข้อความ", "ocr"),
+        ])
+
+    def test_the_body_still_comes_from_the_page_that_won(self):
+        assert "เนื้อความที่ OCR อ่านได้" in self._document().text()
+
+    def test_the_header_comes_from_the_layer(self):
+        from lawscan.rules import gazette
+
+        header = gazette.parse(self._document().header_text)
+        assert header and header.publish_date.year == 2023
+
+    def test_a_page_with_no_layer_falls_back_to_its_own_text(self):
+        import pathlib
+
+        from lawscan.ocr.read import Document, Page
+
+        d = Document(pathlib.Path("x/1.pdf"), [Page(1, "ข้อความเดียว", "text-layer")])
+        assert d.header_text == d.text()
+
+    def test_an_empty_layer_is_not_kept(self):
+        # A page whose layer was blank has no numerals to preserve, so OCR's
+        # reading is the only one there is.
+        import pathlib
+
+        from lawscan.ocr.read import Document, Page
+
+        d = Document(pathlib.Path("x/1.pdf"), [Page(1, "OCR อ่านมา", "ocr", layer="")])
+        assert d.header_text == "OCR อ่านมา"
