@@ -33,6 +33,7 @@ from lawscan.llm import openai_chat
 from lawscan.llm.question import Answer, Question, Timer
 from lawscan.ocr.budget import fit
 from lawscan.ocr.read import Document
+from lawscan.rules import agencies
 
 log = logging.getLogger(__name__)
 
@@ -166,8 +167,15 @@ class Client:
         one that needs it degrades to a prompt with no list rather than to a
         crash on the first document.
         """
-        return {path.stem: path.read_text(encoding="utf-8")
-                for path in sorted(DATA.glob("*.txt"))}
+        found = {path.stem: path.read_text(encoding="utf-8")
+                 for path in sorted(DATA.glob("*.txt"))}
+        # The register of regulators is structured, because a rule reads it
+        # too. Rendering it here rather than keeping a second flat copy is what
+        # stops the prompt and the rule from disagreeing about a name.
+        catalogue = agencies.catalogue(DATA / "agencies.json")
+        if catalogue:
+            found["agencies"] = catalogue
+        return found
 
     def prompt_for(self, question: Question) -> str:
         return question.prompt(self.lists())

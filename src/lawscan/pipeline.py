@@ -33,6 +33,7 @@ from lawscan.audience import tidy
 from lawscan.merge import NOTHING, Row
 from lawscan.ocr.read import Document, load, read
 from lawscan.rules import BANDS, PENALTY_TEXT, categories, penalties, run_all
+from lawscan.rules import agencies as agency_rule
 from lawscan.rules import parent as parent_rule
 
 log = logging.getLogger(__name__)
@@ -445,8 +446,15 @@ def _apply(row: Row, question: str, value: dict, document=None) -> None:
             # form that does not exist.
             cell = named_in(document.text() if document else "", cell) if document else cell
         if field == "agencies":
-            # The waterway regulations name the same two bodies every time,
-            # and the title says which kind of document this is.
+            # The register has the last word on how a name is spelt. A document
+            # writes ``ก.ล.ต.`` and the sheet wants the name it is filed under,
+            # with the ministry above it — a lookup, not a judgement, so it
+            # does not go to a model.
+            if isinstance(cell, list):
+                cell = agency_rule.with_ministry([str(x) for x in cell if x])
+            # A rule still outranks it: the waterway regulations name the same
+            # two bodies every time, in the operator's own punctuation, and the
+            # title says which kind of document this is.
             cell = irrigation_agencies(_cell(row, "ชื่อกฎหมาย")) or cell
         if field == "localGovernment" and isinstance(cell, str):
             # A judgment against a local politician names their council. The
