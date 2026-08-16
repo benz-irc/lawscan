@@ -41,9 +41,29 @@ _DAMAGE = ("ํา", "ำ")
 
 _TRAILING_BRACKET = re.compile(r"\s*\([^)]*\)\s*$")
 
+#: A person's title standing in for the body they head. The sheet files the
+#: body: 100233 answered รัฐมนตรีว่าการกระทรวงการคลัง *and* กระทรวงการคลัง,
+#: which is the same organisation written twice. Only titles whose body is
+#: named inside them are here — ``อธิบดี`` and ``ประธานกรรมการ`` name no body,
+#: and guessing one would put an organisation in the cell that the document
+#: never mentioned.
+_HELD_BY = re.compile(r"^(?:รัฐมนตรีว่าการ|รัฐมนตรีช่วยว่าการ|ปลัด|เลขาธิการ)\s*(?=กระทรวง|สำนัก|ทบวง)")
+
+#: The one title that names no body but has exactly one answer.
+_SEATS: dict[str, str] = {"นายกรัฐมนตรี": "สำนักนายกรัฐมนตรี"}
+
 
 def _tidy(text: str) -> str:
     return " ".join((text or "").replace(*_DAMAGE).split())
+
+
+def body_of(name: str) -> str:
+    """The organisation ``name`` stands for, when ``name`` is a person's title."""
+    tidied = _tidy(name)
+    if tidied in _SEATS:
+        return _SEATS[tidied]
+    stripped = _HELD_BY.sub("", tidied)
+    return stripped if stripped != tidied else tidied
 
 
 @cache
@@ -81,13 +101,13 @@ def official(name: str) -> str:
     the document prints them. Bending those toward a near neighbour would put a
     different organisation in the cell.
     """
-    entry = _index().get(_tidy(name))
+    entry = _index().get(_tidy(name)) or _index().get(body_of(name))
     return entry["name"] if entry else ""
 
 
 def ministry(name: str) -> str:
     """Which ministry ``name`` answers to, or "" if none or unknown."""
-    entry = _index().get(_tidy(name))
+    entry = _index().get(_tidy(name)) or _index().get(body_of(name))
     return entry.get("ministry", "") if entry else ""
 
 
@@ -105,7 +125,7 @@ def with_ministry(names: list[str]) -> list[str]:
     """
     out: list[str] = []
     for raw in names:
-        name = official(raw) or _tidy(raw)
+        name = official(raw) or body_of(raw)
         if name and name not in out:
             out.append(name)
         above = ministry(raw)

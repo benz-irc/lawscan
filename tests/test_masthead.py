@@ -116,3 +116,20 @@ class TestWhatTheScannerLeavesRoundACrest:
         # ไม่มีตัวอักษรในชุด จึงไม่ใช่รอยสแกน
         got = title.read("ประกาศกระทรวง เรื่อง มาตรฐาน 3 5 พ.ศ. 2564 โดยที่เป็นการสมควร")
         assert "3 5" in got
+
+
+class TestALongTitleThatEndedProperly:
+    """เพดานความยาวมีไว้ตัดย่อหน้าที่หาจุดจบไม่เจอ ไม่ใช่ชื่อที่จบเรียบร้อย"""
+
+    def test_a_title_closing_on_its_year_is_kept(self):
+        # 100236 แจกแจงแปดอย่างที่ใบอนุญาตครอบคลุม ยาว 408 ตัวอักษร
+        # และจบด้วย พ.ศ. 2564 ตามปกติ — ไม่มีกฎอื่นเติมช่องนี้ถ้ารูปนี้ปฏิเสธ
+        long = ("ระเบียบกรมอุทยานแห่งชาติ สัตว์ป่า และพันธุ์พืช ว่าด้วย"
+                + "การออกใบอนุญาตหรือใบรับรอง " * 14 + "พ.ศ. 2564 อาศัยอำนาจ")
+        got = title.read(long)
+        assert len(got) > title._TOO_LONG
+        assert got.endswith("พ.ศ. 2564")
+
+    def test_a_paragraph_that_never_ended_is_still_refused(self):
+        runaway = "ประกาศกรมทดสอบ " + "เรื่องที่ยืดยาวไม่มีวันจบ " * 30
+        assert title.read(runaway) == ""

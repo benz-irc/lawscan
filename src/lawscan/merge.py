@@ -149,7 +149,12 @@ def _text(value: Any) -> str:
 #: and the shape is always the same — a real separator the schema did not
 #: offer. Splitting is not a guess about what was meant; nothing in these
 #: columns is ever written across two lines on purpose.
-_BREAKS = re.compile(r"[\t\r\n\v\f]+")
+#: What separates two answers that arrived in one slot. Tabs and newlines are
+#: how a model runs a list together; the arrows are how it copies a prompt.
+#: 100239 answered ``กรมอุทยานแห่งชาติ … → กระทรวงทรัพยากรธรรมชาติ…`` for four
+#: of its six agencies, imitating a table in the instruction that had nothing
+#: to do with the shape of an answer.
+_BREAKS = re.compile(r"[\t\r\n\v\f]+|\s*[→➜➔⟶]\s*")
 
 
 def entries(value: Any) -> list[str]:

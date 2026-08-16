@@ -116,3 +116,27 @@ class TestTheFooterIsNotEveryMentionOfAPage:
         body = ("ตามที่ประกาศไว้ใน หน้า 40 ราชกิจจานุเบกษา แล้วนั้น " + "ก" * 400
                 + " หน้า 22 เล่ม 140 ตอนพิเศษ 13 ง ราชกิจจานุเบกษา 19 มกราคม 2566")
         assert gazette.pages_of([body]) == [22]
+
+
+class TestAnIndexIsNotAScope:
+    """กฎหมายที่เอ่ยครึ่งประเทศไม่ได้บังคับใช้ที่ไหนเป็นการเฉพาะ
+
+    103424 คือ พ.ร.บ. งบประมาณ เอ่ยครบทั้ง 77 จังหวัด และกฎเคยตอบครบทั้ง 77
+    ลงในช่องเดียว 100238 เป็นบัญชีอัตราค่าที่พักอุทยานทั่วประเทศ เอ่ย 10
+    จังหวัด แล้วกฎหยิบเชียงใหม่มาหนึ่งจังหวัดจากตารางค่าที่พัก
+    """
+
+    def test_a_nationwide_list_scopes_nowhere(self):
+        from lawscan.rules import places
+
+        provinces = ["เชียงใหม่", "ลำพูน", "น่าน", "ตาก", "ชุมพร", "พังงา", "ระนอง"]
+        page = " ".join(f"ที่พักในจังหวัด{p} อัตรา 1,000 บาท" for p in provinces)
+        assert places.scope(page, provinces).province is None
+
+    def test_a_canal_across_four_provinces_still_answers(self):
+        from lawscan.rules import places
+
+        provinces = ["แพร่", "ลำปาง", "พะเยา", "เชียงราย", "ตาก", "น่าน"]
+        page = ("กฎกระทรวงกำหนดให้ทางน้ำชลประทานในท้องที่จังหวัดแพร่ จังหวัดลำปาง "
+                "จังหวัดพะเยา และจังหวัดเชียงราย เป็นทางน้ำชลประทาน")
+        assert places.scope(page, provinces).province

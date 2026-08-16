@@ -186,7 +186,14 @@ def read(text: str) -> str:
         head = head[: years[-1].end()]
 
     title = head.strip(" .,")
-    if not _TOO_SHORT <= len(title) <= _TOO_LONG:
+    if len(title) < _TOO_SHORT:
+        return ""
+    # The cap is for a paragraph that never met an ending, so it does not apply
+    # to one that ended at its own year. 100236 names eight things a permit can
+    # be issued for and runs to 408 characters, closing properly with พ.ศ. 2564
+    # — a real title that the cap alone threw away, and nothing else fills the
+    # column when this rule declines.
+    if len(title) > _TOO_LONG and not years:
         return ""
     return title
 

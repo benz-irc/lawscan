@@ -95,3 +95,46 @@ class TestOneSourceOnly:
         line = next(l for l in agencies.catalogue().splitlines() if "\t" in l)
         name, _, ministry = line.partition("\t")
         assert agencies.ministry(name) == ministry
+
+
+class TestATitleStandsForABody:
+    """แผ่นงานเก็บชื่อองค์กร ไม่ใช่ชื่อตำแหน่ง
+
+    100233 ตอบทั้ง ``รัฐมนตรีว่าการกระทรวงการคลัง`` และ ``กระทรวงการคลัง``
+    ซึ่งเป็นองค์กรเดียวกันเขียนสองครั้ง
+    """
+
+    def test_a_minister_is_their_ministry(self):
+        assert agencies.body_of("รัฐมนตรีว่าการกระทรวงการคลัง") == "กระทรวงการคลัง"
+        assert agencies.body_of("ปลัดกระทรวงมหาดไทย") == "กระทรวงมหาดไทย"
+
+    def test_the_prime_minister_has_one_office(self):
+        assert agencies.body_of("นายกรัฐมนตรี") == "สำนักนายกรัฐมนตรี"
+
+    def test_a_title_that_names_no_body_is_left_alone(self):
+        # ``อธิบดี`` ของกรมไหนก็ได้ เดาแล้วจะใส่องค์กรที่เอกสารไม่เคยเอ่ยถึง
+        assert agencies.body_of("อธิบดี") == "อธิบดี"
+        assert agencies.official("อธิบดี") == ""
+
+    def test_the_same_body_twice_collapses(self):
+        got = agencies.with_ministry([
+            "รัฐมนตรีว่าการกระทรวงการคลัง", "กระทรวงการคลัง",
+            "รัฐมนตรีว่าการกระทรวงมหาดไทย", "กระทรวงมหาดไทย",
+        ])
+        assert got == ["กระทรวงการคลัง", "กระทรวงมหาดไทย"]
+
+
+class TestTwoAgenciesInOneSlot:
+    """โมเดลลอกลูกศรจากตัวอย่างใน prompt มาต่อสองหน่วยงานเข้าด้วยกัน"""
+
+    def test_an_arrow_separates_rather_than_joins(self):
+        from lawscan.merge import Row
+
+        row = Row(document="100239")
+        row.put("หน่วยงานกำกับ",
+                ["กรมอุทยานแห่งชาติ สัตว์ป่า และพันธุ์พืช → กระทรวงทรัพยากรธรรมชาติและสิ่งแวดล้อม"],
+                "llm:identity")
+        got = row.value("หน่วยงานกำกับ")
+        assert " → " not in got
+        assert got == ("กรมอุทยานแห่งชาติ สัตว์ป่า และพันธุ์พืช, "
+                       "กระทรวงทรัพยากรธรรมชาติและสิ่งแวดล้อม")

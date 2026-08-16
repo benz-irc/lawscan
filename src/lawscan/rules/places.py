@@ -99,6 +99,12 @@ def hide_citations(text: str) -> str:
     )
 
 
+#: How many provinces an instrument can name and still be about a place. Set
+#: above the widest real case in the corpus — an irrigation area spanning four
+#: — and below where nationwide lists begin.
+_A_SCOPE_NAMES = 6
+
+
 def scope(text: str, provinces: list[str], *, narrative: bool = False) -> Place:
     """Where this instrument applies — not every place it happens to name.
 
@@ -115,6 +121,16 @@ def scope(text: str, provinces: list[str], *, narrative: bool = False) -> Place:
         return Place()
 
     clean = hide_citations(text)
+
+    # A law scoped to a place names one, or the two an irrigation canal runs
+    # through. A law that names half the country is listing facilities, not
+    # binding a territory: the budget act names all 77, an election notice
+    # names 71, a schedule of park accommodation names 10 across five regions.
+    # 538 documents name exactly one province and 164 name two; past six the
+    # shape stops being a scope and becomes an index.
+    if sum(1 for province in provinces if province in clean) > _A_SCOPE_NAMES:
+        return Place()
+
     found = read("", clean, provinces)
 
     # The register finds the districts; the rest of this function decides the
