@@ -438,3 +438,22 @@ class TestEveryPromptIsReachable:
 
         missing = sorted(name for name, q in BY_NAME.items() if not q.path.exists())
         assert missing == [], f"คำถามที่ไม่มีไฟล์ prompt: {missing}"
+
+
+class TestTheDocumentedDefaultIsTheRealOne:
+    """Two files named a model the code does not use.
+
+    ``.env.example`` and the README are the first things a person reads, and a
+    wrong model name there sends the first run to the wrong provider — which
+    fails as a quota error, not as a typo.
+    """
+
+    def test_the_env_example_names_the_model_the_client_falls_back_to(self):
+        from pathlib import Path
+
+        from lawscan.llm.client import FALLBACK_MODEL
+
+        root = Path(__file__).resolve().parent.parent
+        for name in (".env.example", "README.md"):
+            said = (root / name).read_text(encoding="utf-8")
+            assert FALLBACK_MODEL in said, f"{name} ไม่ได้พูดถึง {FALLBACK_MODEL}"

@@ -69,7 +69,12 @@ TEMPERATURE = 0.0
 #: ``or`` and not ``get``'s default: ``LAWSCAN_MODEL=`` set to nothing is how
 #: a shell says "use the default", and reading it literally asks the provider
 #: for a model with no name.
-MODEL = os.environ.get("LAWSCAN_MODEL") or "gemini-3.1-flash-lite"
+#: Named rather than written inline so ``.env.example`` and the README can be
+#: checked against it. Not ``usage.DEFAULT_MODEL``, which is what a saved run
+#: from before the model was recorded gets priced at — a fact about old
+#: folders, not the model this runs.
+FALLBACK_MODEL = "gemini-3.1-flash-lite"
+MODEL = os.environ.get("LAWSCAN_MODEL") or FALLBACK_MODEL
 
 #: Only to skip prompts that obviously cannot be cached. The real floor is the
 #: provider's — "Cached content is too small. total_token_count=202,
