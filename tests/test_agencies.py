@@ -138,3 +138,94 @@ class TestTwoAgenciesInOneSlot:
         assert " → " not in got
         assert got == ("กรมอุทยานแห่งชาติ สัตว์ป่า และพันธุ์พืช, "
                        "กระทรวงทรัพยากรธรรมชาติและสิ่งแวดล้อม")
+
+
+class TestTheRegisterWritesTheBracket:
+    """Whatever bracket arrives with a name is dropped before the lookup.
+
+    Measured over the operator's 240 rows: 96 cells carry a bracket, every one
+    of them holds an initialism, and not one holds a ministry. So the bracket
+    is the register's to write, and a name that arrives wearing another one is
+    still the same agency.
+    """
+
+    def test_an_invented_initialism_is_replaced_by_the_register_s(self):
+        assert agencies.with_ministry(["สำนักงานคณะกรรมการกำกับกิจการพลังงาน (สำนักงาน กกพ.)"]) == [
+            "สำนักงานคณะกรรมการกำกับกิจการพลังงาน (กกพ.)", "กระทรวงพลังงาน"]
+
+    def test_a_ministry_in_the_bracket_becomes_its_own_item(self):
+        """``กรมปศุสัตว์ (กระทรวงเกษตรและสหกรณ์)`` matches no register row at
+        all while the bracket is on it, so neither name was reaching the
+        sheet in the register's spelling."""
+        assert agencies.with_ministry(["กรมปศุสัตว์ (กระทรวงเกษตรและสหกรณ์)"]) == [
+            "กรมปศุสัตว์", "กระทรวงเกษตรและสหกรณ์"]
+
+
+class TestTwoNamesInOneItem:
+    """A pair joined by a comma is two answers, not one name."""
+
+    def test_the_pair_is_split_before_the_lookup(self):
+        assert agencies.with_ministry(["กรมเจ้าท่า (กระทรวงคมนาคม), รัฐมนตรีว่าการกระทรวงคมนาคม"]) == [
+            "กรมเจ้าท่า", "กระทรวงคมนาคม"]
+
+    def test_no_register_name_holds_a_comma(self):
+        """Which is what makes splitting on one safe."""
+        import json
+        rows = json.loads(agencies.REGISTER.read_text(encoding="utf-8"))["agencies"]
+        assert not [r for r in rows if "," in r["name"]]
+
+
+class TestATitleIsNotAnOrganisation:
+    """The column asks which body regulates. Naming the person at its head
+    answers a different question — the operator's sheet writes a title in 4 of
+    239 filled cells, and in each of those the register already supplies it."""
+
+    def test_a_title_is_dropped_inside_a_ministry_chain(self):
+        """A department's own director is the department written twice."""
+        assert agencies.with_ministry(["กรมปศุสัตว์", "อธิบดีกรมปศุสัตว์"]) == [
+            "กรมปศุสัตว์", "กระทรวงเกษตรและสหกรณ์"]
+
+    def test_a_title_survives_where_no_ministry_sits_above(self):
+        """An independent body's head regulates a layer of its own, which is
+        why the operator's sheet writes ``สำนักงานศาลยุติธรรม, ประธานศาลฎีกา``
+        and ``สำนักงานผู้ตรวจการแผ่นดิน, องค์กรอิสระ, ประธานผู้ตรวจการแผ่นดิน``."""
+        assert agencies.with_ministry(["สำนักงานผู้ตรวจการแผ่นดิน", "ผู้ตรวจการแผ่นดิน"]) == [
+            "สำนักงานผู้ตรวจการแผ่นดิน", "องค์กรอิสระ", "ผู้ตรวจการแผ่นดิน"]
+
+    def test_a_title_the_register_supplies_is_kept(self):
+        """``ประธานศาลฎีกา`` is what the register files สำนักงานศาลยุติธรรม
+        under. Dropping it would be overruling the register, not the model."""
+        assert agencies.with_ministry(["สำนักงานศาลยุติธรรม"]) == [
+            "สำนักงานศาลยุติธรรม", "ประธานศาลฎีกา"]
+
+    def test_a_title_is_kept_when_it_is_the_only_answer(self):
+        """An empty cell says the document names no regulator. It does."""
+        assert agencies.with_ministry(["ประธานศาลฎีกา"]) == ["ประธานศาลฎีกา"]
+
+    def test_a_seat_the_register_already_wrote_is_not_written_twice(self):
+        """The register files ปปง. under ``นายกรัฐมนตรี``. Converting the
+        model's own copy of that title to ``สำนักนายกรัฐมนตรี`` would put the
+        same seat in the cell twice under two spellings."""
+        assert agencies.with_ministry([
+            "สำนักงานคณะกรรมการป้องกันและปราบปรามการฟอกเงิน (สำนักงาน ป.ป.ง.)",
+            "นายกรัฐมนตรี",
+        ]) == ["สำนักงานคณะกรรมการป้องกันและปราบปรามการฟอกเงิน (ปปง.)", "นายกรัฐมนตรี"]
+
+
+class TestAJudgmentNamesItsCourt:
+    """V19 rule 14.3 asks for the court alone on a judgment or a ruling, and
+    the sheet writes ``ศาลรัฐธรรมนูญ`` — not the office that administers it,
+    and not the presiding judge."""
+
+    def test_the_office_prefix_comes_off(self):
+        assert agencies.court_only(
+            ["สำนักงานศาลรัฐธรรมนูญ", "ประธานศาลรัฐธรรมนูญ"]) == ["ศาลรัฐธรรมนูญ"]
+
+    def test_a_court_already_named_is_left_alone(self):
+        assert agencies.court_only(["ศาลฎีกาแผนกคดีอาญาของผู้ดำรงตำแหน่งทางการเมือง"]) == [
+            "ศาลฎีกาแผนกคดีอาญาของผู้ดำรงตำแหน่งทางการเมือง"]
+
+    def test_an_answer_with_no_court_in_it_survives(self):
+        """The rule only fires on judgments; if one names no court at all,
+        emptying the cell would be worse than leaving what was found."""
+        assert agencies.court_only(["กรมสรรพากร"]) == ["กรมสรรพากร"]

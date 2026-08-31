@@ -151,3 +151,33 @@ class TestTheVerdict:
             Page(n, "", "text-layer", has_image=True) for n in range(2, 8)
         ]
         assert judge(_document(pages), _row()).score < REVIEW_BELOW
+
+
+def _doc(sources):
+    """A document whose pages carry the given (source, layer) pairs."""
+    from pathlib import Path as _Path
+
+    from lawscan.ocr.read import Document, Page
+
+    pages = [Page(i, "เนื้อความ", src, layer=layer)
+             for i, (src, layer) in enumerate(sources, start=1)]
+    return Document(_Path("ทดสอบ.pdf"), pages)
+
+
+def test_recognising_a_page_that_kept_its_layer_is_not_a_doubt():
+    """The layer lied about the Thai and still holds the numerals."""
+    from lawscan.confidence import _mostly_recognised
+    from lawscan.merge import Row
+
+    repaired = _doc([("ocr", "เล่ม ๑๓๗ ตอนที่ ๑๔ ก")] * 4)
+    assert _mostly_recognised(repaired, Row(document="ทดสอบ")) is None
+
+
+def test_a_page_with_no_layer_at_all_still_counts_against_confidence():
+    from lawscan.confidence import _mostly_recognised
+    from lawscan.merge import Row
+
+    scanned = _doc([("ocr", "")] * 4)
+    finding = _mostly_recognised(scanned, Row(document="ทดสอบ"))
+    assert finding is not None
+    assert finding.penalty == 0.15

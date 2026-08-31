@@ -244,7 +244,20 @@ _JOIN_WITH_SPACE = re.compile(r"([฀-๿])\n(?!\n)[ \t]*(" + "|".join(_SPACED_S
 #: สระ อำ and สระ อำ onto ้ + สระ อำ, so "มาตรา" prints as "มำตรำ", "กำหนด" as
 #: "ก้ำหนด", and "จังหวัดปทุมธานี" as "จังหวัดปทุมธำนี" — which is why that
 #: law's province looked absent when it is on the page twice.
-_SWAPPED_AA_MARKERS = ("มำตรำ", "พระรำชบัญญัติ", "ตำมควำม", "อ้ำเภอ", "รำชกำร")
+_SWAPPED_AA_MARKERS = (
+    "มำตรำ", "พระรำชบัญญัติ", "ตำมควำม", "อ้ำเภอ", "รำชกำร",
+    # Five markers were not enough. Swept over the whole 3,424-document corpus,
+    # 270 documents carry the fault and not one of them contains any of the
+    # five above — the repair has never once fired in production. These are the
+    # words those 270 do carry, each checked against the corpus so that the
+    # broken spelling is never itself correct Thai:
+    #
+    #     ห้ำม      96 against ห้าม    2,805        ประกำศ    458 against ประกาศ   16,140
+    #     สำนักงำน 479 against สำนักงาน 17,238      รำยกำร    224 against รายการ    7,087
+    #     หน่วยงำน 524 against หน่วยงาน 11,351      หมำยเหตุ  281 against หมายเหตุ  3,008
+    "ห้ำม", "สำนักงำน", "หน่วยงำน", "ประกำศ", "รำยกำร", "หมำยเหตุ",
+    "ค้ำปลีก", "ค้ำส่ง",
+)
 
 #: ``C ้ ำ`` in a faulty document is ambiguous, and this is the one thing the
 #: repair cannot settle by rule. It is either a genuine สระ อำ that the fault
@@ -303,6 +316,131 @@ def repair_swapped_sara_aa(text: str, *, force: bool = False) -> str:
     text = text.replace("ำ", "า").replace(_TRUE_AM, "ำ")
     log.info("swapped_sara_aa_repaired")
     return text
+
+
+#: Words the page-wide swap above cannot reach. It turns every ``ำ`` on a page
+#: into ``า`` and back, which is right when the font swapped the whole page and
+#: wrong when only part of it is damaged: ``สำนักงำน`` needs its first vowel
+#: kept and its second repaired, and no page-wide rule can do both.
+#:
+#: Every pair was counted over the 3,424-document corpus before being added.
+#: Eight of the ten are decided by the count — the correct form outnumbers the
+#: broken one five to seventy times over. The last two are not: ``ค้ำส่ง``
+#: appears 25 times against 9 for ``ค้าส่ง``, because the handful of documents
+#: about wholesale and retail are damaged in every one of their pages. They are
+#: here anyway, on the language rather than the arithmetic: ``ค้ำ`` is to prop
+#: something up, and nothing props up a ``ปลีก``.
+_LATE_REPAIRS: dict[str, str] = {
+    "สำนักงำน": "สำนักงาน",   # 413 against 17,304
+    "หน่วยงำน": "หน่วยงาน",   # 439 against 11,435
+    "สินค้ำ": "สินค้า",       # 461 against 2,414
+    "ประกำศ": "ประกาศ",       # 422 against 16,177
+    "หมำยเหตุ": "หมายเหตุ",   # 255 against 3,034
+    "รำยกำร": "รายการ",       # 203 against 7,108
+    "กำรค้ำ": "การค้า",       # 40 against 1,878
+    "ค้ำส่ง": "ค้าส่ง",        # 25 against 9 — decided on the language
+    "ค้ำปลีก": "ค้าปลีก",      # 23 against 6 — decided on the language
+    "ห้ำม": "ห้าม",
+}
+_LATE = re.compile("|".join(sorted(_LATE_REPAIRS, key=len, reverse=True)))
+
+
+#: Tone marks and vowels recognition drops outright. A different fault from the
+#: vowel swap above, and it needs a different guard: several of these broken
+#: forms are a *prefix* of the correct spelling — ``ตอนที`` is ``ตอนที่`` with
+#: the mark gone — so a pattern that matched them plainly would eat the correct
+#: spelling too and leave it unchanged only by luck.
+#:
+#: Counted over the corpus's 3,424 documents, broken form against correct.
+#: Every one of them is a word Thai does not have: ``ท้องที`` and ``ฉบับที``
+#: exist only on a page recognition has been over.
+_DROPPED_MARKS: dict[str, str] = {
+    "ตอนที": "ตอนที่",        # 4,498 against 11,098 — the masthead of every page
+    "ท้องที": "ท้องที่",       # 1,644 against 3,644
+    "ซึง": "ซึ่ง",             # 1,380 against 20,755
+    "วันที": "วันที่",         # 1,237 against 17,600
+    "ชือ": "ชื่อ",             # 1,163 against 19,900 — repairs สินเชือ with it
+    "เกียวกับ": "เกี่ยวกับ",   # 1,039 against 10,698
+    "เมือ": "เมื่อ",           # 607 against 10,237, once เมือง is set aside
+    "ฉบับที": "ฉบับที่",       # 346 against 5,363
+    "พืน": "พื้น",             # 304 against 12,179
+    "ลำดับที": "ลำดับที่",     # 91 against 1,092
+    "ทีเกี่ยว": "ที่เกี่ยว",   # 47 against 7,570
+    "ครั้งที": "ครั้งที่",     # 33 against 1,347
+    "เพือ": "เพื่อ",           # 18 against 29,510
+    "พืนที": "พื้นที่",        # both halves broken at once
+    "พินที": "พื้นที่",        # 6 against 7,953
+}
+
+#: ``เมือ`` is the one that cannot be decided by the mark alone: ``เมือง`` is a
+#: word, 14,269 of them, and it opens with the same three letters. Its guard is
+#: the letter behind rather than the mark.
+_ALSO_NOT_BEHIND: dict[str, str] = {"เมือ": "ง"}
+
+_TONE_MARKS = "่้๊๋์"
+_DROPPED = re.compile("|".join(
+    re.escape(word) + f"(?![{_TONE_MARKS}{_ALSO_NOT_BEHIND.get(word, '')}])"
+    for word in sorted(_DROPPED_MARKS, key=len, reverse=True)
+))
+
+
+#: ``พ.ศ.`` as recognition returns it when the abbreviation's dots and the
+#: Thai letters around them confuse the shape. ``พ`` becomes ``W``, ``ศ``
+#: becomes ``A`` or ``e``, and the year that follows is untouched.
+#:
+#: Only when a four-digit year follows. ``WA.`` alone appears 222 times in the
+#: corpus with nothing to prove it is anything, and those are left as they
+#: are; with a year behind it there is nothing else it can be — no Thai
+#: instrument writes ``WA. 2522`` — and it turns up 1,389 times across 670
+#: documents.
+_MISREAD_BE = re.compile(r"\b(?:WA|We|Wt)\.\s*(?=[\d๐-๙]{4})")
+
+
+#: ``เรื่อง`` as recognition returns it when the two tall letters and the tone
+#: mark above them are read as one Latin word. It stands between an
+#: instrument's name and its subject — ``ประกาศกระทรวงสาธารณสุข (ฉบับที่ 367)
+#: พ.ศ. 2557 Gas การแสดงฉลากของอาหาร`` — so the loss takes the subject with it,
+#: and a rule looking for the papers a document points at walks past the one it
+#: was written for.
+#:
+#: Twenty of these in the corpus and only seven are the fault. The other
+#: thirteen are the English word, in a marine inspection report and a
+#: chromatography method: ``Exhaust Gas Cleaning System``, ``Gas Chromatography``,
+#: ``Liquefied Natural Gas``. What separates them is what follows — the fault is
+#: always followed by Thai, and the word by more English.
+_MISREAD_SUBJECT = re.compile(r"\bGas\s+(?=[ก-๙])")
+
+
+def repair_misread_subject(text: str) -> str:
+    """``Gas`` where the page prints ``เรื่อง``, and only there."""
+    return _MISREAD_SUBJECT.sub("เรื่อง ", text)
+
+
+def repair_buddhist_era(text: str) -> str:
+    """``WA. 2522`` back to ``พ.ศ. 2522``."""
+    return _MISREAD_BE.sub("พ.ศ. ", text)
+
+
+def repair_known_words(text: str) -> str:
+    """The words the page-wide vowel swap leaves behind, fixed by name.
+
+    A list rather than a rule, because no rule separates them: ``น้ำ`` appears
+    12,870 times and is right every time, and ``ค้ำประกัน`` is a real word. Only
+    the specific spellings above are ever wrong, and only they are touched.
+    """
+    return _LATE.sub(lambda m: _LATE_REPAIRS[m.group(0)], text)
+
+
+def repair_dropped_marks(text: str) -> str:
+    """Words recognition returned with a tone mark or a vowel missing.
+
+    Named one at a time for the same reason as the list above: no rule
+    separates a mark that was dropped from a mark that was never there. What
+    decides each entry is that the broken spelling is not a Thai word — so
+    wherever it appears, something has gone wrong, and there is exactly one
+    thing it can have been.
+    """
+    return _DROPPED.sub(lambda m: _DROPPED_MARKS[m.group(0)], text)
 
 
 def join_broken_thai_words(text: str) -> str:
@@ -422,6 +560,12 @@ def normalize_text(text: str, *, join_words: bool = True, convert_digits: bool =
         text = thai_to_arabic_digits(text)
     if join_words:
         text = join_broken_thai_words(text)
+    # Last, once the marks are attached and the words are whole: only then do
+    # the damaged spellings look like themselves.
+    text = repair_known_words(text)
+    text = repair_dropped_marks(text)
+    text = repair_misread_subject(text)
+    text = repair_buddhist_era(text)
     text = collapse_whitespace(text)
     return _SPACE_BEFORE_PUNCT.sub(r"\1", text)
 

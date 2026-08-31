@@ -367,6 +367,51 @@ def _etl(args: argparse.Namespace) -> int:
     )
 
 
+def _batch(args: argparse.Namespace) -> int:
+    """Build the file, hand it over, and wait — or come back for it later."""
+    from lawscan.llm import batch
+    from lawscan.llm.client import Client
+    from lawscan.llm.questions import ALL
+    from lawscan.ocr.read import read
+    from lawscan.pipeline import _answered_by_rules
+    from lawscan.rules import run_all
+
+    client = Client()
+    if args.collect:
+        kept, lost = batch.collect(client, args.collect, args.workdir)
+        print(f"เก็บคำตอบ {kept} รายการ · ล้ม {lost}")
+        print(f"ประกอบ CSV ต่อโดยไม่เสียเงิน:  lawscan scan <PDF…> "
+              f"--workdir {args.workdir} --reuse --out <ไฟล์>")
+        return 0 if not lost else 1
+
+    lines = []
+    for path in _pdfs(args.path):
+        document = read(path, ocr=not args.no_ocr)
+        found = run_all(document)
+        for question in ALL:
+            if _answered_by_rules(question, found):
+                continue
+            lines.append(batch.request_for(client, question, document))
+    if not lines:
+        print("ไม่มีคำถามที่ต้องถาม", file=sys.stderr)
+        return 1
+    if len(lines) > batch.CHUNK:
+        print(f"คำขอ {len(lines):,} เกินหนึ่งไฟล์ ({batch.CHUNK:,}) — แบ่งชุดก่อน",
+              file=sys.stderr)
+        return 2
+    job = batch.send(client, lines)
+    print(f"งาน {job}")
+    if args.now:
+        state = batch.wait(client, job, limit=args.wait)
+        if state.status == "completed":
+            kept, lost = batch.collect(client, job, args.workdir)
+            print(f"เก็บคำตอบ {kept} รายการ · ล้ม {lost}")
+            return 0
+        print(f"สถานะ {state.status} — เรียกเก็บทีหลังด้วย"
+              f"  lawscan batch --collect {job} --workdir {args.workdir}")
+    return 0
+
+
 def _clean(args: argparse.Namespace) -> int:
     """Delete kept runs so nothing is reused. Says what it would do first."""
     from lawscan.clean import clear, find, report
@@ -397,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
                        help="โฟลเดอร์ PDF (ค่าเริ่มต้น pdfs)")
     p_etl.add_argument("--into", type=Path, default=Path("tests"),
                        help="ที่เก็บผลแต่ละรอบ (ค่าเริ่มต้น tests)")
-    p_etl.add_argument("--expected", type=Path, default=Path("data/expected.csv"))
+    p_etl.add_argument("--expected", type=Path, default=Path("reference/expected.csv"))
     p_etl.add_argument("--no-compare", action="store_true", help="ไม่ต้องเทียบ")
     p_etl.add_argument("--fresh", action="store_true",
                        help="ถามโมเดลใหม่ทุกฉบับ ไม่ใช้คำตอบเดิม")
@@ -459,7 +504,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_diff = sub.add_parser("diff", help="เทียบ CSV ของเรากับไฟล์ที่คาดหวัง")
     p_diff.add_argument("ours", type=Path, nargs="?", default=Path("out/result.csv"))
-    p_diff.add_argument("--expected", type=Path, default=Path("data/expected.csv"))
+    p_diff.add_argument("--expected", type=Path, default=Path("reference/expected.csv"))
     p_diff.add_argument("--examples", action="store_true", help="แสดงตัวอย่างที่ไม่ตรง")
     p_diff.add_argument("--thresholds", action="store_true",
                         help="เงื่อนไขเชิงตัวเลขที่เอกสารระบุ แต่ตารางไม่ได้เก็บไว้")
@@ -482,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
     p_row.add_argument("--only", help="ถามเฉพาะคำถามนี้ คั่นด้วยจุลภาค (ใช้กับ --ask)")
     p_row.add_argument("--ours", type=Path, default=Path("out/result.csv"),
                        help="CSV ที่จะเทียบ ถ้าไม่ได้ใช้ --ask")
-    p_row.add_argument("--expected", type=Path, default=Path("data/expected.csv"))
+    p_row.add_argument("--expected", type=Path, default=Path("reference/expected.csv"))
     p_row.add_argument("--pdfs", type=Path, default=Path("pdfs"))
     p_row.add_argument("--text", type=Path, default=Path("text"))
     p_row.add_argument("--into", type=Path, default=Path("out"),
@@ -493,13 +538,28 @@ def main(argv: list[str] | None = None) -> int:
 
     p_rec = sub.add_parser("record", help="เก็บผลรันนี้ไว้เป็นโฟลเดอร์")
     p_rec.add_argument("ours", type=Path, nargs="?", default=Path("out/result.csv"))
-    p_rec.add_argument("--expected", type=Path, default=Path("data/expected.csv"))
+    p_rec.add_argument("--expected", type=Path, default=Path("reference/expected.csv"))
     p_rec.add_argument("--tests", type=Path, default=Path("tests"))
     p_rec.add_argument("--workdir", type=Path,
                        help="โฟลเดอร์ documents/ ของรอบนั้น สำหรับคิดค่าใช้จ่าย")
     p_rec.add_argument("--stamp", help="ใช้เวลานี้แทนเวลาปัจจุบัน เช่น 20260805-1338")
     p_rec.add_argument("--note", default="", help="บันทึกว่ารันนี้ต่างจากรอบก่อนตรงไหน")
     p_rec.set_defaults(run=_record)
+
+    p_batch = sub.add_parser(
+        "batch", help="ส่งคำถามแบบ batch ราคาครึ่งเดียว รอผลได้ถึง 24 ชม."
+    )
+    p_batch.add_argument("path", nargs="*", type=Path, metavar="PATH",
+                         help="ไฟล์ PDF หรือโฟลเดอร์")
+    p_batch.add_argument("--workdir", type=Path, default=Path("out"))
+    p_batch.add_argument("--no-ocr", action="store_true")
+    p_batch.add_argument("--collect", metavar="JOB",
+                         help="เก็บผลของงานที่ส่งไปแล้ว")
+    p_batch.add_argument("--now", action="store_true",
+                         help="รอจนเสร็จแล้วเก็บผลให้เลย")
+    p_batch.add_argument("--wait", type=int, default=1800,
+                         help="รอได้นานสุดกี่วินาที (0 = ไม่จำกัด)")
+    p_batch.set_defaults(run=_batch)
 
     p_clean = sub.add_parser("clean", help="ล้างผลรันเก่า ให้รอบหน้าไม่ข้ามอะไรเลย")
     p_clean.add_argument("--tests", type=Path, default=Path("tests"))

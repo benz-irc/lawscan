@@ -35,6 +35,10 @@ PROSE = {
     "คำแนะนำสิ่งที่ต้องทำ ",
     "AI ให้เหตุผล",
     "หมายเหตุ",
+    # Written for a notification screen rather than for the sheet, and the
+    # operator marks it "รันเฉพาะตอนเทสแจ้งเตือน ไม่รันทั้งหมด". Neither answer
+    # file has the column at all, so there is nothing to score it against.
+    "ข้อความแจ้งเตือน (Smart Prompt)",
 }
 
 #: Columns nothing in the document can answer. The Gazette's own URL carries
@@ -59,7 +63,7 @@ LISTS = {
     "กฎหมายเฉพาะธุรกิจ (Core Business Laws)",
     "กฎหมายสนับสนุนและกฎหมายทั่วไปที่ต้องปฏิบัติตาม (Support & General Compliance)",
     "ใบอนุญาต",
-    "คู่มือ แบบฟอร์ม เอกสารที่แนะนำ",
+    "คู่มือ แบบฟอร์ม เอกสารที่แนะนำ ",
 }
 
 _SPLIT = re.compile(r"[,،;·|\n]+")
@@ -318,6 +322,41 @@ class Column:
     def credit(self) -> float:
         return self.exact + 0.5 * self.partial
 
+    #: Credit counted by how much of the answer matched, rather than by whether
+    #: any of it did. Accumulated per cell in :func:`overlap`.
+    #:
+    #: ``credit`` above charges half a cell for any overlap at all, so one item
+    #: right out of five scores the same as four out of five. On the eight
+    #: columns whose answer is a set of items — the tag columns, the audience,
+    #: the codes — that is most of the corpus's difficulty measured with a coin
+    #: flip. This is the measure the operator and this program agreed to work
+    #: to: 90% of it, links excluded.
+    share: float = 0.0
+
+
+def overlap(column: str, theirs: str, ours: str) -> float:
+    """How much of one cell's answer the other holds, from 0.0 to 1.0.
+
+    Exact is 1.0 and unrelated is 0.0 whatever the column. In between, a column
+    written as a set of items is scored by how much of the set the two share —
+    ``2|A∩B| / (|A|+|B|)``, which falls both when items are missed and when
+    items are invented, so padding the cell cannot buy a better number.
+
+    Everything else keeps the old half-cell for a near miss, because there is
+    no smaller unit to count in a date or a title.
+    """
+    verdict = compare_cell(column, theirs, ours)
+    if verdict in ("exact", "blank"):
+        return 1.0
+    if verdict == "wrong":
+        return 0.0
+    if column in LISTS:
+        left, right = parts(theirs, column), parts(ours, column)
+        if not left or not right:
+            return 0.0
+        return 2 * len(left & right) / (len(left) + len(right))
+    return 0.5
+
 
 def compare_cell(column: str, theirs: str, ours: str) -> str:
     """One of: blank, exact, partial, wrong.
@@ -389,13 +428,23 @@ class Result:
     def exact(self) -> int:
         return sum(c.exact for c in self.columns.values() if c.name not in UNSCORED)
 
+    @property
+    def share(self) -> float:
+        """Credit counted by how much of each answer matched. The agreed measure."""
+        return sum(c.share for c in self.columns.values() if c.name not in UNSCORED)
+
 
 def compare(expected: Path, ours: Path) -> Result:
     their_header, theirs = _rows(expected)
     our_header, mine = _rows(ours)
 
     shared = sorted(set(theirs) & set(mine))
-    columns = {name: Column(name) for name in their_header if name in our_header}
+    # Matched on the stripped name. Four of the operator's headers end in a
+    # space and a fifth gained one between sheet versions; an exact match drops
+    # such a column from the comparison without saying so, which reads as a
+    # column nobody got wrong.
+    ours = {name.strip(): name for name in our_header}
+    columns = {name: Column(name) for name in their_header if name.strip() in ours}
 
     per_document: dict[str, tuple[int, int]] = {}
     for document in shared:
@@ -408,6 +457,7 @@ def compare(expected: Path, ours: Path) -> Result:
                 column.both_blank += 1
                 continue
             setattr(column, verdict, getattr(column, verdict) + 1)
+            column.share += overlap(name, left, right)
             if verdict != "exact" and len(column.examples) < 3:
                 column.examples.append((document, left.strip()[:60], right.strip()[:60]))
             if name in UNSCORED:
@@ -476,6 +526,10 @@ def report(result: Result, *, examples: bool = False) -> str:
             f"รวมตรงบางส่วน {credit / scored:.1%} · "
             f"ผิด {scored - exact - sum(c.partial for c in result.columns.values() if c.name not in UNSCORED):,}"
         )
+        # The measure agreed with the operator: how much of each answer matched,
+        # not whether any of it did. Reported beside the old numbers rather than
+        # instead of them, so every run recorded before today stays comparable.
+        lines.append(f"ตรงตามสัดส่วนรายรายการ {result.share / scored:.1%}  ← เกณฑ์ที่ตกลงกัน")
     if result.missing:
         lines.append(f"เราไม่มี: {', '.join(result.missing)}")
     if result.extra:

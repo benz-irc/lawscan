@@ -62,6 +62,11 @@ PRICES = {
     # the Gemini default above — 26× the real bill across a day of testing.
     #
     # Checked 2026-08-08 · developers.openai.com/api/docs/pricing
+    # Checked against openai.com/api/pricing on 2026-08-19. This row was the
+    # one missing while it was the one in use: ``price_of`` falls back to the
+    # Gemini default for a name it does not know, so every run of the day was
+    # reported at another provider's rates.
+    "gpt-5.4-mini": Price(0.75, 0.075, 4.50),
     "gpt-5": Price(1.25, 0.125, 10.00),
     "gpt-5-mini": Price(0.25, 0.025, 2.00),
     "gpt-5-nano": Price(0.05, 0.005, 0.40),

@@ -47,6 +47,12 @@ class Question:
     #: commencement, its signature and its stated reason at the end, and a
     #: budget that keeps only the opening loses all three on a long document.
     tail_chars: int = 0
+    #: Questions whose answers this one is given. ``notify`` writes a message
+    #: per business code and is told not to invent any, so ``business`` and
+    #: ``support`` have to have run — or be replayed from disk — before it is
+    #: asked. Named here rather than hard-coded in the pipeline so ``--only``
+    #: can honour the dependency instead of silently sending an empty list.
+    needs: tuple[str, ...] = ()
 
     @property
     def path(self) -> Path:

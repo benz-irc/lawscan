@@ -20,7 +20,7 @@ from pathlib import Path
 csv.field_size_limit(10**8)
 
 #: The document number inside whatever the filename cell holds.
-_NUMBER = re.compile(r"\d{5,6}")
+_NUMBER = re.compile(r"^\d{5,7}(?:\.\d+)?")
 
 #: The column both files carry the filename in, trailing space and all.
 FILENAME = "ชื่อไฟล์ "

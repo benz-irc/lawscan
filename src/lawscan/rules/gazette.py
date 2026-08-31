@@ -292,9 +292,76 @@ _RANGE_END = re.compile(
 )
 
 
+#: The same fact without a start date: "มีผลใช้บังคับถึงวันที่ 31 ธันวาคม พ.ศ.
+#: 2561". The range pattern above needs both ends and misses this wording
+#: entirely — which is one of the two real expiries its comment says it costs.
+#:
+#: Kept as narrow as that one: the words ``ใช้บังคับ`` have to be right in front
+#: of ``ถึงวันที่``, so a date range describing what the instrument is *about*
+#: still does not match. Swept over the corpus it fires on one document and is
+#: right about it, which is the whole of what it was added to do.
+_STATED_END = re.compile(
+    r"(?:ใช้บังคับ|มีผลใช้บังคับ)\s*ถึงวันที่\s*(\d{1,2})\s*"
+    r"(" + "|".join(THAI_MONTHS) + r")\s*(?:พ\.ศ\.\s*)?(\d{4})"
+)
+
+
+#: A window with no ``ใช้บังคับ`` in front of it. A tax decree writes its own
+#: expiry as the period the relief covers — "สำหรับการบริจาคที่ได้กระทำตั้งแต่
+#: วันที่ ๑ มกราคม พ.ศ. ๒๕๖๒ ถึงวันที่ ๓๑ ธันวาคม พ.ศ. ๒๕๖๒" — and the pattern
+#: above, which requires the words "ใช้บังคับ" or "มีผล" ahead of the range,
+#: reads straight past it. V16 lists this shape among the keywords for the
+#: column: "ภายในวันที่...ถึงวันที่ [ระบุวันที่เป้าหมาย]".
+#:
+#: Loose enough to be worth checking against the corpus rather than assumed: of
+#: the 22 documents this was measured on, one carries the shape and its date is
+#: the one the operator wrote. Judgments are excluded before this is reached —
+#: they recite the period an offence happened in, which is not an expiry.
+_LOOSE_RANGE = re.compile(
+    r"ตั้งแต่วันที่.{0,80}?ถึงวันที่\s*(\d{1,2})\s*"
+    r"(" + "|".join(THAI_MONTHS) + r")\s*(?:พ\.ศ\.\s*)?(\d{4})",
+    re.DOTALL,
+)
+
+
+#: "ทั้งนี้ สำหรับรอบระยะเวลาบัญชีที่เริ่มในหรือหลังวันที่ ๑ มกราคม พ.ศ. ๒๕๖๒
+#: **แต่ไม่เกินวันที่ ๓๑ ธันวาคม พ.ศ. ๒๕๖๓**" — a relief decree that names no
+#: start of its own still bounds the far end, and none of the patterns above
+#: was looking for that wording.
+_NOT_LATER = re.compile(
+    r"(?:แต่)?ไม่เกินวันที่\s*(\d{1,2})\s*"
+    r"(" + "|".join(THAI_MONTHS) + r")\s*(?:พ\.ศ\.\s*)?(\d{4})"
+)
+
+#: A decree's recital describes the one it replaces, end date and all:
+#: "…ว่าด้วยการยกเว้นรัษฎากร (ฉบับที่ ๖๓๑) พ.ศ. ๒๕๖๐ มีผลใช้บังคับถึงวันที่
+#: ๓๑ ธันวาคม พ.ศ. ๒๕๖๑ แต่โดยที่ยังมีความจำเป็น…". Read as this document's own
+#: expiry it files a decree from 2563 as having lapsed in 2561. V16 says so in
+#: as many words: "ให้พิจารณาวันสิ้นสุดของกฎหมายฉบับปัจจุบันที่กำลังอ่านเท่านั้น
+#: ห้ามดึงวันที่สิ้นสุดของกฎหมายฉบับเก่าที่ถูกอ้างถึงมาตอบ".
+#:
+#: An amendment number in brackets is what marks the sentence as being about
+#: another instrument — a document does not cite its own number that way in the
+#: middle of a recital.
+_ANOTHER_ACT = re.compile(r"\(ฉบับที่\s*[\d๐-๙]+\)")
+
+#: How far back to look for that marker.
+_RECITAL_WINDOW = 90
+
+
+def _about_this_document(flat: str, match: re.Match[str]) -> bool:
+    """Whether the date just found belongs to this instrument or a cited one."""
+    return not _ANOTHER_ACT.search(flat[max(0, match.start() - _RECITAL_WINDOW):match.start()])
+
+
 def stated_end_date(text: str) -> date | None:
     """The day this instrument stops applying, when it states one."""
-    match = _RANGE_END.search((text or "").replace("\n", " "))
+    flat = (text or "").replace("\n", " ")
+    match = None
+    for pattern in (_RANGE_END, _STATED_END, _NOT_LATER, _LOOSE_RANGE):
+        match = next((m for m in pattern.finditer(flat) if _about_this_document(flat, m)), None)
+        if match:
+            break
     if not match:
         return None
     day, month, year = match.groups()
@@ -365,3 +432,17 @@ def pages_of(texts: list[str]) -> list[int]:
                 found.append(int(match.group(1)))
                 break
     return found
+
+
+#: A document announcing that it has itself been repealed. Rare — the fact
+#: usually lives in the later instrument, not this one — but a few carry a
+#: note saying so, and when they do the name is right there.
+_REPEALED_BY = re.compile(
+    r"(?:ถูกยกเลิกโดย|ยกเลิกโดย)\s*([^\n]{6,120}?)\s*(?:\n|$)"
+)
+
+
+def repealed_by(text: str) -> str:
+    """The instrument that repealed this one, when this one says so."""
+    match = _REPEALED_BY.search(text or "")
+    return " ".join(match.group(1).split()) if match else ""

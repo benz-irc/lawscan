@@ -27,6 +27,14 @@ COLUMNS: tuple[str, ...] = (
     "ชื่อกฎหมาย",
     "ลิงค์PDF",
     "สถานะกฎหมาย",
+    # The operator's sheet carries three columns about what an instrument does
+    # to other instruments. Nothing fills them yet; they are written out empty
+    # so every column after them lands where the sheet expects it — Core
+    # Business Laws at AF, Support at AG. A shifted column is worse than a
+    # blank one: it reads as an answer to the wrong question.
+    "ถูกยกเลิกโดยกฎหมายชื่อ",
+    "ยกเลิกกฎหมายอื่นทั้งฉบับ",
+    "แก้ไข/ยกเลิกบางส่วนของกฎหมายอื่น",
     "วันที่ประกาศ",
     "เดือนที่ประกาศ",
     "ปีที่ประกาศ",
@@ -34,6 +42,7 @@ COLUMNS: tuple[str, ...] = (
     "วันที่สิ้นผล",
     "ประเภทกฎหมาย",
     "กฎหมายแม่",
+    "กฎหมายที่อ้างถึง",
     "หน่วยงานกำกับ",
     "องค์กรปกครองส่วนท้องถิ่น",
     "อำเภอ",
@@ -44,7 +53,7 @@ COLUMNS: tuple[str, ...] = (
     "บทลงโทษ",
     "ใบอนุญาต",
     "ข้อมูลแหล่งที่มา",
-    "คู่มือ แบบฟอร์ม เอกสารที่แนะนำ",
+    "คู่มือ แบบฟอร์ม เอกสารที่แนะนำ ",
     "ลิงค์เอกสารที่แนะนำ",
     "กลุ่มเป้าหมาย",
     "Activity_Tag",
@@ -55,6 +64,7 @@ COLUMNS: tuple[str, ...] = (
     "AI ให้เหตุผล",
     "ระดับความมั่นใจ",
     "หมายเหตุ",
+    "ข้อความแจ้งเตือน (Smart Prompt)",
 )
 
 NONE = "-"
@@ -68,10 +78,26 @@ NONE_IS_AN_ANSWER: frozenset[str] = frozenset(
         "อำเภอ",
         "จังหวัด",
         "ใบอนุญาต",
-        "คู่มือ แบบฟอร์ม เอกสารที่แนะนำ",
+        "คู่มือ แบบฟอร์ม เอกสารที่แนะนำ ",
         "ลิงค์เอกสารที่แนะนำ",
         "กฎหมายเฉพาะธุรกิจ (Core Business Laws)",
         "กฎหมายสนับสนุนและกฎหมายทั่วไปที่ต้องปฏิบัติตาม (Support & General Compliance)",
+        # V16 4.3 and 5.4 say so in as many words: "หากในเอกสารไม่มีคำสั่ง
+        # ยกเลิกกฎหมายฉบับอื่นทั้งฉบับ ให้ใส่ -". These were blank because the
+        # schema offers null as the way to say "nothing found" and the model
+        # used it, which is the right answer to the question this code asked
+        # and the wrong shape for the sheet. The dash is added here rather
+        # than demanded of the model, because it is a fact about the format,
+        # not about the law.
+        "ยกเลิกกฎหมายอื่นทั้งฉบับ",
+        "แก้ไข/ยกเลิกบางส่วนของกฎหมายอื่น",
+        # V17 13: "หากสแกนทั้งฉบับแล้วไม่มีการอ้างถึงกฎหมายหรือมติใดๆ ที่เข้า
+        # เงื่อนไขเลย ให้ตอบว่า -". Most instruments cite nothing beyond the act
+        # they are made under, and that one is excluded by the rule itself.
+        "กฎหมายที่อ้างถึง",
+        # Same reasoning, other direction: V16 asks for a sentence of standing
+        # doubt, their sheet writes a dash. Measured against their sheet.
+        "ถูกยกเลิกโดยกฎหมายชื่อ",
     }
 )
 
@@ -99,12 +125,54 @@ def _spaced(title: str) -> str:
 FIRST_DOCUMENT = 100_000
 
 
+#: Past this the number is not a place in the operator's sheet. Their file
+#: runs to 3,424 documents; the ceiling is loose enough to outlast it.
+_CORPUS_CEILING = 100_000
+
+
+def _base_and_suffix(document: str) -> tuple[int, int] | None:
+    """A file name as (document number, annexe number), or None.
+
+    An annexe is numbered off the sheet it belongs to: the operator's file
+    puts ``1000012.1`` between ``100012`` and ``100013`` and numbers it
+    ``12.1``. The leading digits carry one more zero than the document they
+    belong to — the file is named that way and the sheet agrees with itself,
+    so the extra digit is read as the typo it is rather than propagated.
+    """
+    number, _, suffix = (document or "").strip().partition(".")
+    if not number.isdigit() or (suffix and not suffix.isdigit()):
+        return None
+    # ``1000012`` is a document of this corpus with a digit too many — the
+    # sheet numbers it ``12.1`` and files it between 100012 and 100013, so the
+    # number it means is 100012. Rather than encode that one typo, a name too
+    # long to be a document number is tried with each single digit removed,
+    # and the first result that is a real place in the corpus is the one meant.
+    # Nothing shorter or already valid is touched.
+    place = int(number) - FIRST_DOCUMENT
+    if not 0 < place < _CORPUS_CEILING and len(number) > 6:
+        for cut in range(len(number)):
+            candidate = int(number[:cut] + number[cut + 1:])
+            if 0 < candidate - FIRST_DOCUMENT < _CORPUS_CEILING:
+                place = candidate - FIRST_DOCUMENT
+                break
+    return (place, int(suffix or 0)) if 0 < place < _CORPUS_CEILING else None
+
+
 def place_in_corpus(document: str, fallback: int) -> str:
     """Where this document sits in the operator's own numbering."""
-    number = (document or "").strip()
-    if number.isdigit() and int(number) > FIRST_DOCUMENT:
-        return str(int(number) - FIRST_DOCUMENT)
-    return str(fallback)
+    found = _base_and_suffix(document)
+    if found is None:
+        return str(fallback)
+    place, annexe = found
+    return f"{place}.{annexe}" if annexe else str(place)
+
+
+def in_corpus_order(document: str) -> tuple[int, int, str]:
+    """Sort key: the sheet's own order, annexes behind the sheet they follow."""
+    found = _base_and_suffix(document)
+    if found is None:
+        return (1 << 30, 0, document or "")
+    return (*found, document or "")
 
 
 def to_dict(row: Row, order: int) -> dict[str, str]:
@@ -128,7 +196,7 @@ def write_csv(rows: list[Row], path: Path) -> None:
     UTF-8 file without a BOM as Latin-1 and turns every Thai character into
     mojibake.
     """
-    ordered = sorted(rows, key=lambda r: r.document)
+    ordered = sorted(rows, key=lambda r: in_corpus_order(r.document))
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(COLUMNS), extrasaction="ignore")
         writer.writeheader()

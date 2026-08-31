@@ -53,7 +53,16 @@ AUTHORITY = (
 _LAW = (
     "พระราชบัญญัติประกอบรัฐธรรมนูญ", "พระราชบัญญัติ", "พระราชกำหนด",
     "พระราชกฤษฎีกา", "กฎกระทรวง", "ระเบียบ", "ประกาศ", "ข้อบังคับ",
-    "ประมวลกฎหมาย", "ประมวลรัษฎากร", "กฎ",
+    "ประมวลกฎหมาย", "ประมวลรัษฎากร",
+    # The courts' own constituting law. It is neither an Act nor a decree, so
+    # none of the words above reach it, and every instrument the Courts of
+    # Justice issue cites it: 44 documents of the corpus write
+    # ``แห่งพระธรรมนูญศาลยุติธรรม`` in their preamble and the reference file
+    # names it as the parent for every one it scores. The rule read none of
+    # them — the column was simply blank on all of them.
+    "พระธรรมนูญ",
+    # Last, because it is a prefix of ``กฎกระทรวง`` and would swallow it.
+    "กฎ",
 )
 _STARTS_LAW = re.compile(
     r"(?:แห่ง|ของ)\s*(" + "|".join(re.escape(w) for w in _LAW) + r")"
@@ -130,6 +139,22 @@ _HEAD = 4_000
 #: 4 lost on the other side are citations that do carry a sub-clause which
 #: their file chose not to record. Deleting information to match a file that
 #: only sometimes omits it is a losing trade in both directions.
+#:
+#: V16 states the opposite rule outright — "ให้ตัดข้อความขยายทิ้งทั้งหมด เช่น
+#: 'วรรค...', 'ซึ่งแก้ไขเพิ่มเติมโดย...', 'วงเล็บ...'" — and both switches were
+#: flipped to obey it. Measured against the operator's own V16 run they went
+#: back, because that run does not obey it either:
+#:
+#:     ตัดทั้งวงเล็บและวรรค   63.6%   ← what the instruction asks for
+#:     เก็บทั้งคู่            68.2%   ← what their answers contain
+#:     เก็บวงเล็บ ตัดวรรค     65.9%
+#:     ตัดวงเล็บ เก็บวรรค     61.4%
+#:
+#: Their sheet writes ``มาตรา 7 วรรคสาม`` and ``ข้อ 4 (37)`` in the very
+#: columns the instruction says to strip. Two measurements a fortnight apart,
+#: against two different files, both say keep — so the address is written whole
+#: and the conflict is recorded here rather than resolved in the instruction's
+#: favour.
 DROP_BRACKETS = False
 KEEP_PARAGRAPH = True
 
@@ -161,6 +186,68 @@ def has_no_parent(text: str) -> bool:
     return kind.read(text) in kind.NARRATIVE
 
 
+#: ``…แก้ไขเพิ่มเติมพระราชกำหนดการประมง พ.ศ. ๒๕๕๘ พ.ศ. ๒๕๖๑`` — the act being
+#: amended, and then the amending act's own year. Everything from the second
+#: ``พ.ศ.`` onward belongs to the amendment, not to the act it amends.
+_AMENDS = re.compile(
+    r"แก้ไขเพิ่มเติม\s*((?:" + "|".join(re.escape(w) for w in _LAW) + r")"
+    r".*?(?:พ\.ศ\.|พุทธศักราช)\s*\d{4})")
+
+#: How a circular or a ruling points at the act it explains. It never claims
+#: authority under one — it says "regarding", "referring to", "so that
+#: compliance with".
+_POINTS_AT = ("ตามที่", "อ้างถึง", "เพื่อให้การปฏิบัติตาม", "ตามมาตรา")
+
+#: ``กฎหมายว่าด้วยโรงแรม`` is how Thai law points at another act without tying
+#: itself to a year, and 8 of the 31 entries in the operator's referenced
+#: column are written that way. It is read by the prompt rather than by a
+#: pattern here: the name closes on a noun, and ``และ`` is as often inside one
+#: (``กฎหมายว่าด้วยความปลอดภัย อาชีวอนามัย และสภาพแวดล้อมในการทำงาน``) as it is
+#: between two, which no regex settles without cutting real names in half.
+
+_A_LAW_NAME = re.compile(
+    r"((?:" + "|".join(re.escape(w) for w in _LAW) + r")"
+    r"[^,\n]*?(?:พ\.ศ\.|พุทธศักราช)\s*\d{4})")
+
+
+def amended_act(text: str) -> str:
+    """The act this one amends, read out of its own title.
+
+    An amending act cites no authority — there is no ``อาศัยอำนาจ`` clause to
+    read — but its title names the act it changes, and that act is the parent.
+    ``พระราชบัญญัติแก้ไขเพิ่มเติมพระราชกำหนดการประมง พ.ศ. ๒๕๕๘ พ.ศ. ๒๕๖๑``
+    gives ``พระราชกำหนดการประมง พ.ศ. 2558``: the first year closes the name,
+    the second is this instrument's own.
+    """
+    head = " ".join(thai_to_arabic_digits(text or "")[:_HEAD].split())
+    match = _AMENDS.search(head)
+    if not match:
+        return ""
+    name = match.group(1).strip()
+    # ``(ฉบับที่ ๘)`` sits between the act's year and the amendment's, so the
+    # regex above already stops before it. Any that survives is inside the
+    # name and comes off here.
+    return re.sub(r"\s*\(ฉบับที่[^)]*\)", "", name).strip()
+
+
+def pointed_at(text: str) -> str:
+    """The act a circular or a ruling explains, where it claims no authority.
+
+    Read only after the authority clause and the amending title have both come
+    back empty: this phrasing also appears inside ordinary instruments, and
+    there it points at something the document merely mentions.
+    """
+    head = " ".join(thai_to_arabic_digits(text or "")[:_HEAD].split())
+    for phrase in _POINTS_AT:
+        at = head.find(phrase)
+        if at < 0:
+            continue
+        match = _A_LAW_NAME.search(head, at)
+        if match and match.start() - at < 120:
+            return match.group(1).strip()
+    return ""
+
+
 def read(text: str) -> list[str]:
     """Every act this instrument cites as its authority, sections included.
 
@@ -181,6 +268,13 @@ def read(text: str) -> list[str]:
         default=-1,
     )
     if start < 0:
+        # Check 1 came back empty. Two kinds of instrument claim no authority
+        # and still have a parent: one that amends an act names it in its own
+        # title, and a circular names the act it explains. Anything that is
+        # neither is a primary law and the column stays blank.
+        for found in (amended_act(text), pointed_at(text)):
+            if found:
+                return [found]
         return []
 
     preamble = head[start:]
@@ -205,14 +299,24 @@ def read(text: str) -> list[str]:
             # Its sections belong to it, so they leave with it — not to the
             # act named after it.
             continue
-        found.extend(f"{name} {s}".strip() for s in (sections or [""]))
+        found.extend(close_gap(f"{name} {s}".strip()) for s in (sections or [""]))
 
     return _once_each(found)
+
+
+#: Laws whose name carries no year, so ``_LAW_ENDS`` never fires on them and
+#: the name would otherwise run on into the sentence. Each one is a complete
+#: name in itself: the preamble writes ``แห่งพระธรรมนูญศาลยุติธรรม`` and then
+#: goes straight on to who is issuing the instrument.
+_YEARLESS = ("พระธรรมนูญศาลยุติธรรม",)
 
 
 def _name_at(preamble: str, law: re.Match[str]) -> str:
     """The act's name, from ``แห่ง`` to its own year."""
     rest = preamble[law.start(1) :]
+    for whole in _YEARLESS:
+        if rest.startswith(whole):
+            return whole
     stop = _LAW_ENDS.search(rest)
     if not stop:
         return ""
@@ -236,6 +340,22 @@ def _sections_in(span: str) -> list[str]:
     return out
 
 
+#: The Gazette's typesetting opens a gap after the word an instrument calls
+#: itself — ``พระราชบัญญัติ โรคระบาดสัตว์`` on the page, written closed up
+#: everywhere else. The gap before ``ว่าด้วย`` and ``เรื่อง`` is real Thai and
+#: stays; this is the one in front of the instrument's own name.
+_GAP_AFTER_KIND = re.compile(
+    r"(พระราชบัญญัติประกอบรัฐธรรมนูญ|พระราชบัญญัติ|พระราชกำหนด|พระราชกฤษฎีกา"
+    r"|กฎกระทรวง|ประมวลกฎหมาย|ข้อบังคับ|ระเบียบ|ประกาศ|กฎ)\s+"
+    r"(?=[ก-ฮ])(?!ว่าด้วย|เรื่อง)"
+)
+
+
+def close_gap(name: str) -> str:
+    """``พระราชบัญญัติ ก.`` written the way the rest of the sheet writes it."""
+    return _GAP_AFTER_KIND.sub(r"\1", name)
+
+
 def _once_each(items: list[str]) -> list[str]:
     """The same list with repeats dropped, in the order they were cited."""
     seen: set[str] = set()
@@ -245,3 +365,66 @@ def _once_each(items: list[str]) -> list[str]:
             seen.add(item)
             kept.append(item)
     return kept
+
+
+#: ``(ฉบับที่ ๒)`` in an instrument's own title. An instrument numbered this way
+#: exists to change the one before it, and names it by naming itself.
+_EDITION = re.compile(r"\(\s*ฉบับที่\s*[\d๐-๙]+\s*\)")
+
+#: The first section that carries substance. Section 1 gives the instrument its
+#: name and section 2 says when it starts; the section that replaces something
+#: in the earlier edition comes after those.
+_A_SECTION = re.compile(r"มาตรา\s*(\d+)")
+
+#: The sentence an amending instrument opens with, saying what it is for.
+_MEANS_TO_AMEND = re.compile(r"โดยที่เป็นการสมควร\s*แก้ไขเพิ่มเติม")
+
+
+def amended_edition(text: str) -> str:
+    """``‹ชื่อ› พ.ศ. ‹ปีเดิม› (มาตรา ‹เลข›)`` for an instrument titled ``(ฉบับที่ N)``.
+
+    These carry no ``ให้ยกเลิกความใน…`` and no ``ให้ใช้ความต่อไปนี้แทน`` — 100019
+    has none of the keywords the amends rule looks for. What it has is its own
+    title, which names the instrument it changes: the same title at an earlier
+    year, printed again further down the page. Here that second printing is in
+    a map caption, which is why reading the head alone never found it.
+
+    The edition marker comes off the answer. The earlier instrument was itself
+    ``(ฉบับที่ ๒)`` and the sheet writes the name without it, because what
+    identifies the act being changed is its name and its year.
+    """
+    flat = thai_to_arabic_digits(text or "")
+    head = " ".join(flat[:600].split())
+    if not _EDITION.search(head):
+        return ""
+    # The edition number alone is not enough. A royal decree issued under the
+    # Revenue Code is numbered by edition too and each one stands on its own —
+    # 100017 is ``(ฉบับที่ N)`` and the sheet leaves its amends column empty.
+    # What separates them is the sentence of intent: 100019 opens
+    # ``โดยที่เป็นการสมควรแก้ไขเพิ่มเติม…`` and 100017 opens
+    # ``โดยที่เป็นการสมควรยกเว้นภาษีเงินได้…``.
+    if not _MEANS_TO_AMEND.search(" ".join(flat[:1500].split())):
+        return ""
+    title = _EDITION.split(head, 1)[0]
+    # Everything before the edition marker, minus the kind word's own spacing.
+    base = re.sub(r"\s+", "", title)
+    if len(base) < 20:
+        return ""
+    body = re.sub(r"\s+", "", flat)
+    mine = re.search(r"\(ฉบับที่\d+\)พ\.ศ\.(\d{4})", re.sub(r"\s+", "", head))
+    my_year = mine.group(1) if mine else ""
+    # The same name printed again with a different year is the earlier edition.
+    for found in re.finditer(re.escape(base) + r"(?:\(ฉบับที่\d+\))?พ\.ศ\.(\d{4})", body):
+        year = found.group(1)
+        if year and year != my_year:
+            # Counted from where the instrument's own sections begin. The
+            # preamble cites the act it draws power from, sections and all —
+            # scanning from the top picked ``มาตรา 5`` out of
+            # ``แห่งพระราชบัญญัติสถานบริการ พ.ศ. 2509 มาตรา 5``.
+            starts = re.search(r"มาตรา\s*1\s", flat)
+            own = flat[starts.start():] if starts else flat
+            section = next((m.group(1) for m in _A_SECTION.finditer(own)
+                            if m.group(1) not in {"1", "2"} and int(m.group(1)) < 100), "")
+            spaced = " ".join(_EDITION.sub("", title).split())
+            return f"{spaced} พ.ศ. {year}" + (f" (มาตรา {section})" if section else "")
+    return ""

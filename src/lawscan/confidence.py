@@ -84,26 +84,33 @@ def _unread_pages(document: Document, row: Row) -> Finding | None:
         min(0.45, 0.10 + share * 0.5),
         f"อ่านไม่ได้ {len(lost)}/{len(document.pages)} หน้า (เป็นภาพ: "
         f"{', '.join(str(n) for n in lost)})",
-        ("คำอธิบายและสรุปสาระสำคัญ", "ใบอนุญาต", "คู่มือ แบบฟอร์ม เอกสารที่แนะนำ"),
+        ("คำอธิบายและสรุปสาระสำคัญ", "ใบอนุญาต", "คู่มือ แบบฟอร์ม เอกสารที่แนะนำ "),
     )
 
 
 def _mostly_recognised(document: Document, row: Row) -> Finding | None:
-    """A document read by OCR rather than from a text layer.
+    """A document read by OCR with no text layer to fall back on.
 
     Recognition is good but not perfect, and Thai tone marks are the first
     thing it loses — which is exactly what the rules read dates and section
     numbers from.
+
+    Counted on :attr:`blind_pages`, not on every recognised page. Recognition
+    became the *repair* for a lying text layer rather than the last resort for
+    a scan, and once it did, this fired on 68 of 240 documents and marked 63 of
+    them uncertain for having been fixed. A page whose layer is still here is
+    not the case this exists for: the rules read their numerals from that
+    layer, so nothing recognition mangles reaches them.
     """
     if not document.pages:
         return None
-    share = document.scanned_pages / len(document.pages)
+    share = document.blind_pages / len(document.pages)
     if share < 0.5:
         return None
     return Finding(
         "recognised-not-extracted",
         0.15,
-        f"{document.scanned_pages}/{len(document.pages)} หน้ามาจาก OCR ไม่ใช่ชั้นข้อความ",
+        f"{document.blind_pages}/{len(document.pages)} หน้าเป็นภาพล้วน ไม่มีชั้นข้อความสำรอง",
     )
 
 
@@ -222,8 +229,14 @@ def _no_business_codes(document: Document, row: Row) -> Finding | None:
     )
     if (core and core != "-") or (support and support != "-"):
         return None
+    # Costs nothing. The operator writes 100% in 233 of their 240 rows and 95%
+    # in five, so a column that varies is a column that disagrees; and of the
+    # four documents this rule marked down on the scored ten, the operator
+    # calls every one of them 100%. It stays as a note because "no codes" is
+    # still worth seeing next to a row, and stops being an opinion about how
+    # much the row can be trusted.
     return Finding(
-        "no-business-codes", 0.10, "ไม่มีรหัสหมวดธุรกิจทั้งสองช่อง",
+        "no-business-codes", 0.0, "ไม่มีรหัสหมวดธุรกิจทั้งสองช่อง",
         ("กฎหมายเฉพาะธุรกิจ (Core Business Laws)",),
     )
 
@@ -235,7 +248,7 @@ def _truncated_and_incomplete(document: Document, row: Row) -> Finding | None:
     if GAP not in document.text() and len(document.text()) < 12_000:
         return None
     hollow = [
-        c for c in ("ใบอนุญาต", "คู่มือ แบบฟอร์ม เอกสารที่แนะนำ")
+        c for c in ("ใบอนุญาต", "คู่มือ แบบฟอร์ม เอกสารที่แนะนำ ")
         if row.value(c) in ("", "-")
     ]
     if len(hollow) < 2:

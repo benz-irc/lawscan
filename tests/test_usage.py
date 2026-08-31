@@ -167,3 +167,19 @@ class TestReport:
         text = report(read(tmp_path))
         assert "ต่อฉบับ" in text
         assert "ต่อ 1,000 ตัวอักษร" in text
+
+
+def test_the_model_we_actually_run_has_its_own_rate():
+    """A missing row is not an error, which is what made this one expensive.
+
+    ``price_of`` borrows the default provider's rates for an unknown name and
+    the run still prints a number, so a model absent from the table is
+    reported at somebody else's prices with nothing to notice.
+    """
+    from lawscan.llm.client import MODEL
+    from lawscan.usage import PRICES
+
+    assert MODEL in PRICES, (
+        f"{MODEL} คือรุ่นที่ตั้งเป็นค่าเริ่มต้น แต่ไม่มีราคาในตาราง — "
+        "รายงานค่าใช้จ่ายจะไปยืมราคาของผู้ให้บริการอื่นมาใช้โดยไม่มีอะไรฟ้อง"
+    )

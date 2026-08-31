@@ -72,7 +72,7 @@ class TestPipelineIsUntouched:
     def test_the_column_set_did_not_change(self):
         from lawscan.export.columns import COLUMNS
 
-        assert len(COLUMNS) == 33
+        assert len(COLUMNS) == 38
         assert "กลุ่มเป้าหมาย" in COLUMNS
 
     def test_a_rule_still_beats_the_model(self):

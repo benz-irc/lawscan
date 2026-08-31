@@ -172,3 +172,49 @@ class TestCourtDocuments:
             assert title.read(self.JUDGMENT) == ""
         finally:
             title.COMPOSE_COURT_TITLES = True
+
+
+def test_a_court_subject_is_read_off_its_own_line():
+    """The subject ends where its line ends, so the line breaks have to survive."""
+    from lawscan.rules.title import read
+
+    page = (
+        "ในพระปรมาภิไธยพระมหากษัตริย์\n"
+        "ศาลรัฐธรรมนูญ\n\n"
+        "คำวินิจฉัยที่ 20/2564\n"
+        "เรื่องพิจารณาที่ 30/2563\n\n"
+        "วันที่ 17 เดือน พฤศจิกายน พุทธศักราช 2564\n"
+        "ศาลเยาวชนและครอบครัวกลาง\nผู้ร้อง\n-\nผู้ถูกร้อง\n"
+        "เรื่อง ‹หัวข้อคดีที่หน้ากระดาษพิมพ์ไว้เป็นบรรทัดของตัวเอง›\n"
+        "ประเด็นที่ศาลรัฐธรรมนูญต้องพิจารณาวินิจฉัยมีว่า\n"
+    )
+    got = read(page)
+    assert got.startswith("คำวินิจฉัยของศาลรัฐธรรมนูญ คำวินิจฉัยที่ 20/2564 เรื่อง ")
+    # ``เรื่องพิจารณาที่`` is the internal file reference, not the subject.
+    assert "พิจารณาที่" not in got
+
+
+def test_a_recognised_court_name_is_written_the_way_it_is_spelled():
+    """Recognition drops a vowel and adds a digit; the title must not."""
+    from lawscan.rules.title import _court_name
+
+    assert _court_name("ในพระปรมาภิไธย ศาลรฐธ5รรมนูญ คำวินิจฉัยที่ 2/2565") == "ศาลรัฐธรรมนูญ"
+    assert _court_name("ศาลรัฐธรรมนูญ") == "ศาลรัฐธรรมนูญ"
+    assert _court_name("ศาลฎีกาแผนกคดีอาญาของผู้ดำรงตำแหน่งทางการเมือง") == (
+        "ศาลฎีกาแผนกคดีอาญาของผู้ดำรงตำแหน่งทางการเมือง"
+    )
+    assert _court_name("ระเบียบคณะกรรมการ ว่าด้วยหลักเกณฑ์") == ""
+
+
+def test_the_subject_line_survives_a_dropped_tone_mark():
+    """A recognised page writes ``เรือง`` where the paper writes ``เรื่อง``."""
+    from lawscan.rules.title import _SUBJECT
+
+    got = _SUBJECT.search("ผู้ถูกร้อง\nเรือง ‹หัวข้อคดีที่พิมพ์ไว้เป็นบรรทัดของตัวเอง›\nประเด็นที่ต้องวินิจฉัย\n")
+    assert got and got.group(1).startswith("‹หัวข้อคดี")
+
+
+def test_the_internal_file_reference_is_still_not_a_subject():
+    from lawscan.rules.title import _SUBJECT
+
+    assert not _SUBJECT.search("คำวินิจฉัยที่ 2/2567\nเรื่องพิจารณาที่ 23/2566\nวันที่ 25 มกราคม\n")

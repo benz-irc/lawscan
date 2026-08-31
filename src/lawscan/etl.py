@@ -53,7 +53,7 @@ def _unread(files: list[Path], text: Path) -> list[Path]:
 
 
 def _number(path: Path) -> str:
-    found = re.search(r"(\d{5,6})", path.stem)
+    found = re.match(r"(\d{5,7}(?:\.\d+)?)", path.stem)
     return found.group(1) if found else path.stem
 
 

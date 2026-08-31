@@ -143,3 +143,27 @@ class TestKey:
     def test_the_comparison_key_survives_every_fold_at_once(self):
         # Thai digits, a stray space, and OCR damage in one cell.
         assert key("พ.ศ. ๒๕๖๓ ก่อสรำง") == key("พ.ศ.2563ก่อสร้าง")
+
+
+def test_overlap_counts_how_much_matched_not_whether_any_did():
+    """``credit`` ให้ครึ่งช่องกับการทับซ้อนใด ๆ — ตรง 1 ใน 5 เท่ากับตรง 4 ใน 5
+
+    แปดคอลัมน์ที่คำตอบเป็นชุดรายการคือ 28% ของตาราง การวัดมันด้วยการโยนเหรียญ
+    คือการไม่วัดมัน
+    """
+    from lawscan.diff import overlap
+
+    col = "Activity_Tag"
+    assert overlap(col, "ก, ข, ค", "ก, ข, ค") == 1.0
+    assert overlap(col, "ก, ข, ค", "ง, จ, ฉ") == 0.0
+    # ตรงสองจาก (3+3) รายการ → 2*2/6
+    assert abs(overlap(col, "ก, ข, ค", "ก, ข, ง") - 2 / 3) < 1e-9
+    # เติมรายการเกินมาแล้วคะแนนต้องตก ไม่ใช่เท่าเดิม
+    assert overlap(col, "ก, ข", "ก, ข, ค, ง") < overlap(col, "ก, ข", "ก, ข")
+
+
+def test_a_column_that_is_not_a_list_keeps_the_half_cell():
+    from lawscan.diff import overlap
+
+    assert overlap("ชื่อกฎหมาย", "ประกาศ เรื่อง ก", "ประกาศ เรื่อง ก") == 1.0
+    assert overlap("ชื่อกฎหมาย", "ประกาศ เรื่อง ก", "ระเบียบ เรื่อง ข") == 0.0

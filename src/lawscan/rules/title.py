@@ -133,9 +133,28 @@ _TOO_SHORT = 12
 #: further in, on the ``เรื่อง`` line that opens the recital. So this is still
 #: copying; it just copies from three places instead of one.
 _COURT = re.compile(r"(คำพิพากษา|คำวินิจฉัย)")
-_COURT_NAME = re.compile(
-    r"(ศาลฎีกาแผนกคดีอาญาของผู้ดำรงตำแหน่งทางการเมือง|ศาลรัฐธรรมนูญ|ศาลปกครองสูงสุด|ศาลฎีกา)"
+#: The court's name as printed, and as recognition mangles it. A page that
+#: had to be recognised is exactly the page whose name arrives damaged —
+#: ``ศาลรฐธ5รรมนูญ`` for ``ศาลรัฐธรรมนูญ``, a dropped vowel and a stray digit
+#: — and matching the clean spelling only meant abstaining on the documents
+#: this composer exists for. Each pattern is loose in the middle, where the
+#: damage lands, and anchored at both ends, where it does not; the title is
+#: written with the canonical spelling whichever form matched.
+_COURTS = (
+    ("ศาลฎีกาแผนกคดีอาญาของผู้ดำรงตำแหน่งทางการเมือง",
+     re.compile(r"ศาลฎีกาแผนกคดีอาญา\S{0,6}ผู้ดำรง\S{0,4}แหน่งทางการเมือง")),
+    ("ศาลรัฐธรรมนูญ", re.compile(r"ศาล[ก-๙\d]{0,4}รรมนูญ")),
+    ("ศาลปกครองสูงสุด", re.compile(r"ศาลปกครอง\S{0,3}สุด")),
+    ("ศาลฎีกา", re.compile(r"ศาลฎีกา")),
 )
+
+
+def _court_name(head: str) -> str:
+    """The court this document belongs to, spelled the way the operator spells it."""
+    for name, pattern in _COURTS:
+        if pattern.search(head):
+            return name
+    return ""
 #: The docket line, both numbers together. Kept in the order the page prints
 #: them because the operator's file keeps it.
 _DOCKET = re.compile(
@@ -146,7 +165,16 @@ _RULING_NUMBER = re.compile(r"(คำวินิจฉัยที่\s*[\d๐-
 #: The subject, on its own line. ``เรื่องพิจารณาที่`` is the internal file
 #: reference that sits above it and is not a subject; ``เรื่อง`` followed by a
 #: space and a phrase is.
-_SUBJECT = re.compile(r"เรื่อง\s+([^\n]{6,90}?)\s*(?:\n|ผู้ร้อง|ผู้ถูกกล่าวหา|นาย|นาง|คณะกรรมการ)")
+#: ``เรื่อง`` as printed and as recognition returns it. The tone mark is the
+#: first thing OCR drops from Thai, and this word carries one: a recognised
+#: page says ``เรือง`` where the paper says ``เรื่อง``. Insisting on the mark
+#: meant abstaining on exactly the documents that had to be recognised.
+#: ``เรือง`` alone is a real word, so the space after it still has to be there
+#: — which is also what keeps ``เรื่องพิจารณาที่``, the internal file
+#: reference printed above the subject, from being read as one.
+_SUBJECT = re.compile(
+    r"เรื่?อง\s+([^\n]{6,90}?)\s*(?:\n|ผู้ร้อง|ผู้ถูกกล่าวหา|นาย|นาง|คณะกรรมการ)"
+)
 
 #: Whether to compose a title for court documents rather than abstain. Left as
 #: a switch because it is the one place this file writes a name the page does
@@ -223,14 +251,22 @@ def _court_title(text: str, head: str) -> str:
     three pieces at once and does not need them to be where this expects.
     """
     kinds = _COURT.search(head)
-    court = _COURT_NAME.search(head)
+    court = _court_name(head)
     if not kinds or not court:
         return ""
-    subject = _SUBJECT.search(" ".join(text[:_HEAD * 3].split()).replace(" เรื่อง ", "\nเรื่อง "))
+    # Spaces collapse, line breaks do not. Flattening the whole passage first
+    # and re-inserting a break before each ``เรื่อง`` looked equivalent and was
+    # not: the subject ends at the end of its line, and flattening removed the
+    # only marker of that. With every break gone the pattern had to run on to
+    # the *next* ``เรื่อง``, which is past its ninety-character limit, so it
+    # matched nothing and the composer abstained on documents whose subject was
+    # sitting there in plain sight.
+    lines = "\n".join(" ".join(l.split()) for l in text[:_HEAD * 3].splitlines())
+    subject = _SUBJECT.search(lines)
     if not subject:
         return ""
 
-    name = f"{kinds.group(1)}ของ{court.group(1)}"
+    name = f"{kinds.group(1)}ของ{court}"
     number = _RULING_NUMBER.search(head)
     if number:
         name += f" {number.group(1)}"

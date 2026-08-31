@@ -125,3 +125,101 @@ class TestUnmappedMarksAreReportedNotFatal:
         from lawscan.ocr.thai_text import restore_pua_marks
 
         assert restore_pua_marks("ประกาศกระทรวง") == "ประกาศกระทรวง"
+
+
+def test_words_the_page_wide_swap_cannot_reach_are_repaired_by_name():
+    """``สำนักงำน`` needs its first vowel kept and its second repaired.
+
+    The page-wide swap turns every ``ำ`` into ``า``, which is right for a page
+    the font damaged entirely and wrong for one damaged in part. Twelve
+    documents of the corpus were left holding these after that pass ran.
+    """
+    from lawscan.ocr.thai_text import repair_known_words
+
+    assert repair_known_words("สำนักงำน") == "สำนักงาน"
+    assert repair_known_words("ราคาสินค้ำและบริการ") == "ราคาสินค้าและบริการ"
+    assert repair_known_words("ค้ำปลีกค้ำส่ง") == "ค้าปลีกค้าส่ง"
+
+
+def test_it_leaves_words_that_are_spelled_right():
+    """``น้ำ`` is right 12,870 times and ``ค้ำประกัน`` is a real word."""
+    from lawscan.ocr.thai_text import repair_known_words
+
+    for right in ("น้ำมันเชื้อเพลิง", "หนังสือค้ำประกัน", "จำนวนสมาชิก", "สำนักงานคณะกรรมการ"):
+        assert repair_known_words(right) == right
+
+
+def test_the_buddhist_era_abbreviation_is_restored_when_a_year_follows():
+    """``พ.ศ.`` comes back from recognition as ``WA.`` — 670 documents carry it."""
+    from lawscan.ocr.thai_text import repair_buddhist_era
+
+    assert repair_buddhist_era("พระราชบัญญัติควบคุมอาคาร WA. 2522") == (
+        "พระราชบัญญัติควบคุมอาคาร พ.ศ. 2522"
+    )
+    assert repair_buddhist_era("ระเบียบบริหารราชการแผ่นดิน We. 2535 ซึ่งแก้ไข") == (
+        "ระเบียบบริหารราชการแผ่นดิน พ.ศ. 2535 ซึ่งแก้ไข"
+    )
+
+
+def test_it_is_left_alone_without_a_year_behind_it():
+    """``WA.`` on its own could be anything, and 222 of them are."""
+    from lawscan.ocr.thai_text import repair_buddhist_era
+
+    assert repair_buddhist_era("มาตรฐาน WA. ตามที่กำหนด") == "มาตรฐาน WA. ตามที่กำหนด"
+
+
+def test_a_dropped_tone_mark_is_put_back():
+    """``ตอนที 13 ก`` — the masthead of every page recognition has been over."""
+    from lawscan.ocr.thai_text import repair_dropped_marks
+
+    assert repair_dropped_marks("เล่ม 137 ตอนที 13 ก") == "เล่ม 137 ตอนที่ 13 ก"
+    assert repair_dropped_marks("ในท้องทีจังหวัด") == "ในท้องที่จังหวัด"
+    assert repair_dropped_marks("ผู้ซึงทำงาน") == "ผู้ซึ่งทำงาน"
+
+
+def test_a_spelling_that_is_already_right_is_left_alone():
+    """The broken forms are prefixes of the correct ones; the guard is the mark."""
+    from lawscan.ocr.thai_text import repair_dropped_marks
+
+    for whole in ("เล่ม 137 ตอนที่ 13 ก", "ในท้องที่จังหวัด", "ผู้ซึ่งทำงาน",
+                  "ชื่อกฎหมาย", "วันที่ 5 มกราคม"):
+        assert repair_dropped_marks(whole) == whole
+
+
+def test_the_city_keeps_its_name():
+    """``เมือ`` is ``เมื่อ`` with a mark gone, and ``เมือง`` is a word.
+
+    14,269 of them in the corpus against 607 of the broken ``เมือ``, so the
+    guard here is the letter behind rather than the mark above.
+    """
+    from lawscan.ocr.thai_text import repair_dropped_marks
+
+    assert repair_dropped_marks("ผังเมือง อำเภอเมืองขอนแก่น") == "ผังเมือง อำเภอเมืองขอนแก่น"
+    assert repair_dropped_marks("เมือรถออก") == "เมื่อรถออก"
+
+
+def test_a_word_broken_in_two_places_is_repaired_whole():
+    """``พืนที`` lost a vowel and a tone mark; the longer entry wins."""
+    from lawscan.ocr.thai_text import repair_dropped_marks
+
+    assert repair_dropped_marks("พืนทีสกัด") == "พื้นที่สกัด"
+    assert repair_dropped_marks("ในพินทีบางส่วน") == "ในพื้นที่บางส่วน"
+
+
+def test_the_subject_word_read_as_a_latin_one_is_put_back():
+    """``เรื่อง`` between an instrument's name and its subject came back ``Gas``."""
+    from lawscan.ocr.thai_text import repair_misread_subject
+
+    broken = "ประกาศกระทรวงสาธารณสุข (ฉบับที่ 367) พ.ศ. 2557 Gas การแสดงฉลากของอาหาร"
+    assert repair_misread_subject(broken).endswith("เรื่อง การแสดงฉลากของอาหาร")
+
+
+def test_the_english_word_gas_is_left_alone():
+    """Thirteen of the corpus's twenty are the word, not the fault."""
+    from lawscan.ocr.thai_text import repair_misread_subject
+
+    for english in ("Exhaust Gas Cleaning System (EGCS)",
+                    "แก๊สโครมาโทกราฟี (Gas Chromatography)",
+                    "Liquefied Natural Gas (LNG)",
+                    "Calibration Gas Cylinder I.D."):
+        assert repair_misread_subject(english) == english

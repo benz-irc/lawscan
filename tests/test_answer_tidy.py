@@ -71,18 +71,23 @@ class TestPenaltyWording:
     """The band labels are the operator's vocabulary, not ours.
 
     The column is compared as one string, so a band whose label reads the same
-    but is not written the same scores zero. Two of the four were our own
-    phrasing; these are the words their file uses.
+    but is not written the same scores zero.
+
+    ``BLUE`` is a dash rather than a phrase, and that is V16 rather than a
+    shortcut: กรณี 1 says a regulation that binds only officials, or edits
+    wording, or lays no duty on anyone outside government, answers ``-``. The
+    phrase that used to sit here appears nowhere in the operator's
+    instructions.
     """
 
-    def test_the_four_bands_use_the_reference_wording(self):
-        from lawscan.rules import PENALTY_TEXT
+    def test_the_bands_use_the_operators_wording(self):
+        from lawscan.rules import NONE, PENALTY_TEXT
 
         assert PENALTY_TEXT == {
             "RED": "โทษทางอาญา",
             "ORANGE": "โทษทางปกครอง / โทษทางแพ่ง",
             "YELLOW": "เสียสิทธิประโยชน์ / ผลทางนิติกรรม",
-            "BLUE": "ระเบียบภาครัฐ",
+            "BLUE": NONE,
         }
 
 
@@ -222,3 +227,30 @@ class TestIrrigationActivity:
         row.put("ชื่อกฎหมาย", self.TITLE, "rule")
         _apply(row, "summary", {"activityTags": ["ใช้น้ำชลประทาน"]})
         assert row.cells["Activity_Tag"].value == "กำหนดทางน้ำชลประทาน, เรียกเก็บค่าชลประทาน"
+
+
+class TestTheLineBreakTagSurvives:
+    """V16 asks for ``<br>`` by name; the placeholder stripper was eating it.
+
+    The stripper exists because an older prompt drew its examples as
+    ``<ชื่อสินค้า>`` and the model copied the brackets into the cell. ``<br>``
+    is the one thing inside angle brackets that belongs there, and without an
+    exception every reasoning cell came back with ``ทดเลขในใจbr0)`` — the tag
+    dismantled, its letters welded to the sentence.
+    """
+
+    def test_a_line_break_is_kept(self):
+        from lawscan.merge import _item
+
+        assert _item("ทดเลขในใจ<br>0) เขตอำนาจ") == "ทดเลขในใจ<br>0) เขตอำนาจ"
+        assert _item("ก<br>ข<br>ค") == "ก<br>ข<br>ค"
+
+    def test_a_placeholder_is_still_unwrapped(self):
+        from lawscan.merge import _item
+
+        assert _item("<ทรัพย์สิน>, <เงิน>") == "ทรัพย์สิน, เงิน"
+
+    def test_a_stray_bracket_still_goes(self):
+        from lawscan.merge import _item
+
+        assert _item("ชื่อ> ที่มีวงเล็บเกิน") == "ชื่อ ที่มีวงเล็บเกิน"

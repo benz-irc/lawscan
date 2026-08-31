@@ -110,3 +110,30 @@ class TestTheShortForm:
 
     def test_a_university_is_not_a_section_either(self):
         assert tidy("สำนักงาน ม.เกษตรศาสตร์") == "สำนักงาน ม.เกษตรศาสตร์"
+
+
+def test_the_source_cites_the_first_page_only():
+    """V16 forbids the span this used to write.
+
+    The rule read every page's footer and cited the range the instrument
+    occupies. V16 rules that out in as many words — "ให้ดึงเฉพาะตัวเลขจาก
+    หน้าแรกสุด ... ห้ามนำเลขหน้าของหน้าอื่นมาเชื่อมต่อกันเป็นช่วง" — so the
+    header's own page number is the whole answer.
+    """
+    from pathlib import Path as _Path
+
+    from lawscan.ocr.read import Document, Page
+    from lawscan.rules import run_all
+
+    head = "หน้า 8\nเล่ม 137 ตอนที่ 13 ก\nราชกิจจานุเบกษา\n14 กุมภาพันธ์ 2563\n"
+    document = Document(
+        path=_Path("ทดสอบ.pdf"),
+        pages=[
+            Page(number=1, text=head + "กฎกระทรวงทดสอบระบบ พ.ศ. 2563", source="text-layer"),
+            Page(number=2, text="หน้า 9\nข้อ 2 ทดสอบ", source="text-layer"),
+            Page(number=3, text="หน้า 10\nข้อ 3 ทดสอบ", source="text-layer"),
+        ],
+    )
+    got = run_all(document)["ข้อมูลแหล่งที่มา"]
+    assert got == "ราชกิจจานุเบกษา เล่ม 137 ตอนที่ 13 ก หน้า 8"
+    assert "9" not in got and "10" not in got

@@ -53,14 +53,19 @@ BANDS: dict[str, str] = {
 #: The wording is the operator's, not a paraphrase of it. This column is
 #: compared whole, so ``มีโทษทางอาญา จำคุกหรือปรับ`` and ``โทษทางอาญา`` score
 #: as a disagreement about the law when they are a disagreement about phrasing.
+NONE = "-"
+
 PENALTY_TEXT: dict[str, str] = {
     "RED": "โทษทางอาญา",
     "ORANGE": "โทษทางปกครอง / โทษทางแพ่ง",
     "YELLOW": "เสียสิทธิประโยชน์ / ผลทางนิติกรรม",
-    "BLUE": "ระเบียบภาครัฐ",
+    # V16 กรณี 1: "หากเป็นระเบียบภายในของรัฐ (คุมข้าราชการ), การแก้คำผิด, หรือ
+    # เอกสารที่ไม่กำหนดหน้าที่ให้ภาคธุรกิจ/ประชาชนเลย ให้ตอบ - ทันที". The word
+    # that used to sit here, ``ระเบียบภาครัฐ``, appears nowhere in V16 — it is
+    # a constant left from an earlier version, and it filled a column the
+    # operator leaves empty.
+    "BLUE": NONE,
 }
-
-NONE = "-"
 
 
 def thai_date(value: date | None) -> str:
@@ -109,6 +114,18 @@ def run_all(document: Document, *, law_type: str | None = None) -> dict[str, str
     found["วันที่สิ้นผล"] = thai_date(end) if end else NONE
     found["สถานะกฎหมาย"] = gazette.status(end)
 
+    # V16 asks for the words "รอตรวจสอบจากฐานข้อมูล" here when nothing is
+    # found, and their own sheet writes "-" instead — on all twenty of the
+    # twenty-one reviewed documents that reach this line. Where their prompt
+    # and their answers disagree, the answers are what we are measured
+    # against, so the dash is what this writes.
+    #
+    # A document almost never announces its own repeal: the fact arrives
+    # later, in the instrument that does the repealing. Written by the rule
+    # because a constant is not worth a call, and overwritten by
+    # :func:`gazette.repealed_by` on the rare page that does say so.
+    found["ถูกยกเลิกโดยกฎหมายชื่อ"] = gazette.repealed_by(text) or NONE
+
     # A judgment is not made under an act; it applies one. Asked anyway, the
     # model returned an empty list on all six court documents of the last run,
     # and the reference file writes a dash for eleven of the seventeen it holds
@@ -140,18 +157,15 @@ def run_all(document: Document, *, law_type: str | None = None) -> dict[str, str
         found["วันที่ประกาศ"] = str(published.day)
         found["เดือนที่ประกาศ"] = THAI_MONTHS[published.month - 1]
         found["ปีที่ประกาศ"] = str(published.year + 543)
-        # The pages the instrument occupies, not only the one it starts on:
-        # every page carries its own number in the footer, and the operator
-        # cites the span. The footer is Gazette furniture like the header, so
-        # it is read the same way — 100087's footers run 1..7 in the text
-        # layer and 1,2,3,5,5,2,3 once OCR has been over them, which turns a
-        # seven-page instrument into a five-page one.
-        span = gazette.page_span(
-            gazette.pages_of([page.layer or page.text for page in document.pages])
-        ) or str(header.page)
+        # The first page only. This used to cite the span the instrument
+        # occupies — every page carries its own number in the footer, and it
+        # was read the same way the header is — but V16 forbids it in as many
+        # words: "ให้ดึงเฉพาะตัวเลขจากหน้าแรกสุด ... ห้ามนำเลขหน้าของหน้าอื่นมา
+        # เชื่อมต่อกันเป็นช่วง (เช่น หน้า 1-5) โดยเด็ดขาด". The footer reader
+        # stays where it is; nothing else needs it, and the next version may.
         found["ข้อมูลแหล่งที่มา"] = (
             f"ราชกิจจานุเบกษา เล่ม {header.volume} "
-            f"{header.issue_kind} {header.issue} หน้า {span}"
+            f"{header.issue_kind} {header.issue} หน้า {header.page}"
         )
         # A derived rule first — it is the document's own arithmetic. Then a
         # date written out. Only if it says neither does publication stand in.

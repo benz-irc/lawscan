@@ -15,11 +15,13 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from lawscan import progress
 from lawscan.ocr.thai_text import (
-    normalize_text, repair_swapped_sara_aa, thai_char_ratio,
+    normalize_text, normalize_unicode, repair_swapped_sara_aa, restore_pua_marks,
+    restore_sara_am, thai_char_ratio, thai_to_arabic_digits,
 )
 
 log = logging.getLogger(__name__)
@@ -32,8 +34,21 @@ _TEXT_LAYER_MIN = 40
 #: The running header the Gazette prints on every page. Kept on the first page
 #: — it is where the volume, issue and publication date are read from — and
 #: dropped from the rest, where it interrupts a sentence mid-clause.
+#: Tone marks are optional and the words may sit on separate lines, because
+#: the Gazette's own font drops them: the header prints as ``เลม ๑๓๗`` and
+#: ``หนา ๘``, not ``เล่ม`` and ``หน้า``, and ``ราชกิจจานุเบกษา`` lands on the
+#: next line rather than the same one.
+#:
+#: The strict pattern this replaces matched **none** of the 91 documents with a
+#: PDF here — the header was never once kept, on any document, ever. Which is
+#: why ``prompts/*.md`` can say "read the top right corner of the page" and the
+#: model never had a top right corner to read: only ``gazette.py``, reading the
+#: layer by itself, ever saw one.
 _RUNNING_HEADER = re.compile(
-    r"^\s*(?:หน้า\s*\d+\s*\n)?\s*เล่ม\s*\S+\s*ตอน\S*\s*\S+\s*ราชกิจจานุเบกษา[^\n]*\n",
+    r"^[ \t]*(?:หน้?า\s*[\d๐-๙]+[^\n]*\n)?"
+    r"[ \t]*เล่?ม\s*\S+\s*ตอน\S*\s*[^\n]*\n"
+    r"[ \t]*ราชกิจจานุเบกษา[^\n]*\n"
+    r"(?:[ \t]*[\d๐-๙]+\s+\S+\s+[\d๐-๙]{4}[^\n]*\n)?",
     re.MULTILINE,
 )
 
@@ -129,6 +144,17 @@ class Page:
         return bool(_ANNEX.search(head[:_HEADING]))
 
 
+#: The operator numbers annexes with a suffix — ``100012.1`` is a sheet
+#: belonging to ``100012`` — and one file in the corpus is numbered
+#: ``1000012.1``, seven digits before the dot. ``\d{5,6}`` read the first six
+#: of those as ``100001`` and wrote the annexe's text over that document's,
+#: silently, because a stem that merely *contains* five digits was enough.
+#:
+#: Anchored at the start and allowed to run to seven digits with an optional
+#: suffix, so a name is taken whole or not at all.
+_DOCUMENT_NUMBER = re.compile(r"^(\d{5,7}(?:\.\d+)?)")
+
+
 @dataclass(slots=True)
 class Document:
     path: Path
@@ -141,7 +167,7 @@ class Document:
     @property
     def number(self) -> str:
         """The operator's document number, from the file name."""
-        match = re.search(r"(\d{5,6})", self.path.stem)
+        match = _DOCUMENT_NUMBER.match(self.path.stem)
         return match.group(1) if match else self.path.stem
 
     def text(self, limit: int | None = None) -> str:
@@ -177,6 +203,20 @@ class Document:
     @property
     def scanned_pages(self) -> int:
         return sum(1 for page in self.pages if page.source == "ocr")
+
+    @property
+    def blind_pages(self) -> int:
+        """Pages recognised with nothing else to fall back on.
+
+        Not the same as :attr:`scanned_pages`, and the difference decides how
+        much to trust the reading. A page with no text layer at all was
+        recognised because there was no choice, and whatever recognition got
+        wrong is simply wrong. A page that *had* a layer was recognised because
+        the layer lied — ``looks_garbled`` or ``looks_collapsed`` caught it —
+        and the layer is still here, holding the numerals the rules read. That
+        page is better off than it was, not worse.
+        """
+        return sum(1 for page in self.pages if page.source == "ocr" and not page.layer)
 
     @property
     def unread_pages(self) -> tuple[int, ...]:
@@ -277,7 +317,8 @@ def read(path: Path, *, ocr: bool = True, mode: str = "text") -> Document:
             pictured = _has_picture(page)
 
             layer = ""
-            if ocr and (len(raw.strip()) < _TEXT_LAYER_MIN or looks_garbled(raw)):
+            if ocr and (len(raw.strip()) < _TEXT_LAYER_MIN
+                        or looks_garbled(raw) or looks_collapsed(raw)):
                 # Kept only when there was something to keep: a page whose
                 # layer was empty has no numerals to preserve.
                 layer = raw if raw.strip() else ""
@@ -324,6 +365,30 @@ _THAI_FLOOR = 0.4
 _ENOUGH_LETTERS = 20
 
 
+#: Letters that are neither Thai nor ASCII. A Gazette page prints English —
+#: ``(account administrator)``, ``ISO``, a botanical name — so Latin letters
+#: are not evidence of anything. Latin-1 letters are: ``Ö`` ``Ü`` ``Þ`` ``Ý``
+#: belong to no language this corpus is written in, and they appear only where
+#: a subset font's glyph table has slipped and the layer is returning the wrong
+#: characters for the right shapes.
+#:
+#: This is the half of the lying-layer problem the Thai-share test cannot see.
+#: That test asks how much of the page is Thai, and a layer that turned half
+#: its letters into symbols still reads as 0.42 Thai — over the floor, so the
+#: page was kept. Measured over the corpus the two are cleanly apart: the pages
+#: that need recognising carry 13% to 29% of these, and pages that are merely
+#: bilingual carry none at all.
+_FOREIGN_CEILING = 0.05
+
+
+def _foreign_share(letters: list[str]) -> float:
+    """How much of this page is written in an alphabet nothing here uses."""
+    if not letters:
+        return 0.0
+    odd = sum(1 for ch in letters if ord(ch) > 127 and not ("\u0e00" <= ch <= "\u0e7f"))
+    return odd / len(letters)
+
+
 def looks_garbled(text: str) -> bool:
     """Whether a page's text layer decoded to something that is not Thai.
 
@@ -347,7 +412,57 @@ def looks_garbled(text: str) -> bool:
     letters = [ch for ch in text if ch.isalpha()]
     if len(letters) < _ENOUGH_LETTERS:
         return False
-    return thai_char_ratio("".join(letters)) < _THAI_FLOOR
+    if thai_char_ratio("".join(letters)) < _THAI_FLOOR:
+        return True
+    return _foreign_share(letters) > _FOREIGN_CEILING
+
+
+#: Spellings that exist only on a page this fault has been over. Each is a
+#: real word with ``า`` collapsed into ``ำ``, and none of them is a word in its
+#: own right — there is no ``กำร``, no ``ควำม``, no ``งำน``. Counted over the
+#: corpus, every one of them turns up twenty to forty times less often than the
+#: word it is a ruin of, which is what a fault confined to a few pages looks
+#: like. ``ทำง`` was a candidate and is not here: it sits inside ``ทำงาน``,
+#: which is spelled exactly that way and is correct.
+_COLLAPSED = re.compile(
+    "กำร|ควำม|ตำม|นำย|หมำย|งำน|รำย|ประกำศ|กล่ำว|ผ่ำน|"
+    "ต่ำง|อย่ำง|สำมำรถ|หน้ำ|อำนำจ|สถำน"
+)
+
+#: One impossible word is enough when the page's vowels are also wrong. A clean
+#: Thai page spends about an eighth of its ``า``/``ำ`` budget on ``ำ``; a third
+#: is already far outside that, and a collapsed page runs past nine tenths.
+_AM_SHARE = 0.30
+
+
+def looks_collapsed(text: str) -> bool:
+    """Whether this text layer wrote every ``า`` as ``ำ``.
+
+    A second way for a text layer to lie, and the one :func:`looks_garbled`
+    cannot see: every character it returns is a valid Thai letter, so the
+    Thai-share test passes and the page sails through holding ``กำรนำส่ง`` where
+    it should hold ``การนำส่ง``.
+
+    It cannot be undone by rule. :func:`repair_swapped_sara_aa` assumes the
+    font *exchanged* the two vowels, and exchanging them back is exact. This
+    fault is not an exchange but a collapse — ``า`` becomes ``ำ`` and ``ำ``
+    stays ``ำ`` — so the two are no longer distinguishable and swapping back
+    turns ``สำนักงำน`` into ``สานักงาน``, trading one error for two. What the
+    page said survives only in its picture, so a page this returns true for is
+    recognised instead, and its layer is kept for the numerals.
+
+    Normalises before looking, because the gate this feeds runs before the
+    normalising does: the raw layer writes ``อ ำนำจ`` with the sara-am adrift,
+    and none of the spellings below would match it.
+    """
+    text = restore_sara_am(normalize_unicode(restore_pua_marks(text)))
+    hits = len(_COLLAPSED.findall(text))
+    if hits >= 2:
+        return True
+    if not hits:
+        return False
+    am, aa = text.count("ำ"), text.count("า")
+    return am + aa >= _ENOUGH_LETTERS and am / (am + aa) > _AM_SHARE
 
 
 def _has_picture(page: object) -> bool:
@@ -438,6 +553,202 @@ def _engine_missing(why: str) -> None:
     )
 
 
+def _header_from_layer(text: str, layer: str) -> str:
+    """The recognised page's header, replaced by the one the layer printed.
+
+    A page is recognised because its layer lied about the Thai, and the lie is
+    confined to the letters: the volume, issue and date are Thai numerals, and
+    a font that collapses ``า`` into ``ำ`` leaves ``๒๕๖๓`` alone. Recognition
+    is the other way round — it reads the body well and the header badly,
+    because the header is one small line above a rule and it comes back as
+    ``15 กุมภาพันธี์ 25203`` where the layer says ``๑๔ กุมภาพันธ์ ๒๕๖๓``.
+
+    The rules never saw this: they read numerals from ``page.layer`` and got
+    the right date all along. The model reads ``page.text`` and got 100006
+    wrong by a day and forty years. So each side keeps what it is good at —
+    the layer's header, the recognised body.
+
+    Both are searched with digits normalised, because the pattern counts digits
+    and the layer writes them in Thai; the replacement is the layer's own text.
+    """
+    here = _RUNNING_HEADER.search(thai_to_arabic_digits(text))
+    there = _RUNNING_HEADER.search(thai_to_arabic_digits(layer))
+    if here is None or there is None:
+        return text
+    return text[:here.start()] + layer[there.start():there.end()] + text[here.end():]
+
+
+#: The two numbers a Gazette title is built from. Both are small print, and
+#: both are printed in Thai numerals that recognition mangles.
+#:
+#: The year pattern takes four digits or more so a mangled ``25205`` still
+#: matches its slot. The issue pattern reads whatever sits between
+#: ``ฉบับที่`` and its closing bracket, digits or not, because recognition
+#: returned ``(ฉบับที on)`` for ``(ฉบับที่ ๓)`` — a slot with no digit left in
+#: it at all, which a digit pattern would skip and leave misaligned.
+#: Slots whose value the layer holds and recognition mangles, each aligned on
+#: its own. ``พ.ศ.`` and ``ฉบับที่`` may be replaced first-alone when the two
+#: sides cannot be matched up — a year is set in the largest type on the page
+#: and there is one of it. The Gazette's furniture may not: ``ข้อ`` appears a
+#: dozen times and the first is no more anchored than the rest.
+#:
+#: ``[าำ]`` inside the keywords, not only the values. The layer that needs
+#: repairing is the collapsed one, so it prints ``หน้ำ`` and ``มำตรำ``, and a
+#: keyword spelled the right way matches the recognised side only — which left
+#: the two sides holding different counts and the repair declining.
+#:
+#: Split one keyword per pattern rather than joined by alternation, because
+#: recognition drops a slot here and there: page one of 100021 shows nine in
+#: the layer and eight in the reading, and one joined pattern refuses the whole
+#: page over it while ``เล่ม`` and ``หน้า`` line up perfectly on their own.
+#: A grouped thousand is one slot, not two. 100121 page eight charges a fee
+#: "สำหรับแต่ละ ๓,๓๐๐ กิโลวัตต์", and a value that stops at the comma counted
+#: ``3`` and ``300`` as separate slots on the layer's side against the single
+#: ``coo`` recognition returned — three slots against five, and the page was
+#: refused. The grouped form comes first so it is preferred where both fit.
+_VALUE = (
+    r"([\d๐-๙]{1,3}(?:,[\d๐-๙]{3})+|[\d๐-๙A-Za-z]{1,4})(?![\d๐-๙A-Za-z])"
+)
+_FROM_LAYER: tuple[tuple[re.Pattern[str], bool], ...] = (
+    # Two digits, not four. A year is always four on the layer's side, but the
+    # recognised side is where the fault is: 100117 page four came back
+    # ``พ.ศ. 250`` for ``พ.ศ. ๒๕๐๗``, a digit short. Demanding four made the
+    # broken slot the one the repair could not see, which is backwards.
+    (re.compile(r"(พ\.ศ\.\s*)([\d๐-๙]{2,6})"), True),
+    (re.compile(r"(ฉบับที่?\s*)([^)\s]{1,8})(?=\))"), True),
+    *((re.compile(rf"({word}\s+)" + _VALUE), False) for word in (
+        r"เล่ม", r"ตอนที่?", r"หน้[าำ]", r"ข้อ", r"ม[าำ]ตร[าำ]", r"วันที่?",
+    )),
+    # A quantity has no keyword in front of it, only a unit behind: "อาคารที่มี
+    # ความสูงเกิน oo เมตร", "แต่ละ coo กิโลวัตต์". 117 documents of the corpus
+    # carry one. Anchored on the unit instead, with an empty first group so the
+    # replacement machinery above needs no special case.
+    (re.compile(
+        r"()(?<=[\s(])([\d๐-๙]{1,3}(?:,[\d๐-๙]{3})+|[\d๐-๙A-Za-z]{1,4})"
+        r"(?=\s*(?:เมตร|ตัน|กิโลวัตต์|ต[าำ]ร[าำงง]*เมตร"
+        r"|บ[าำ]ท|วัน|ปี|คน|ฉบับ|ลิตร|กิโลกรัม))"
+    ), False),
+)
+
+
+#: How alike two slots have to read before one is taken to stand for the
+#: other. The eleven true pairs on 100015's page score 0.91 and above; the two
+#: quantities on 100121's page seven that genuinely cannot be told apart —
+#: recognition offering ``500`` where the layer prints ``๑๐๐`` — score 0.50 and
+#: 0.65, and are left alone.
+_SAME_SLOT = 0.75
+
+_ONLY_LETTERS = re.compile(r"[^ก-ฮ]")
+
+
+def _surroundings(text: str, start: int, end: int) -> str:
+    """The Thai letters either side of a slot, digits and marks dropped.
+
+    Both sides, because the first slot on a page has nothing in front of it —
+    the volume in the masthead, the year in a title — and a key that is empty
+    on the left matches every other empty key perfectly.
+
+    Letters only, because the two sides disagree about everything else: one
+    prints ``ำ`` where the other prints ``า``, one keeps the tone mark the
+    other dropped, and the digits are the very thing being decided.
+    """
+    before = _ONLY_LETTERS.sub("", text[max(0, start - 30) : start])[-18:]
+    return before + "|" + _ONLY_LETTERS.sub("", text[end : end + 30])[:18]
+
+
+def _same_slot(
+    pattern: re.Pattern[str], layer: str, text: str
+) -> list[tuple[re.Match[str], re.Match[str]]]:
+    """Recognised slots paired with the layer slots standing in the same place.
+
+    Counting was the old rule: replace every slot when both sides hold the same
+    number of them, and refuse the page otherwise. It refused often. 100015's
+    page prints eleven years and recognition returned eight, so ten years kept
+    the digits recognition guessed — ``๒๕๓๔`` came back ``2535``, ``๒๕๔๕`` came
+    back ``2555``, ``๒๕๖๓`` came back ``2523``. Every one is a well-formed year
+    in the right range, so nothing downstream can tell it is the wrong one.
+
+    Reading what surrounds a slot settles it without counting. A year in a Thai
+    instrument sits inside a phrase that names it — ``ตำมระเบียบบริหำรรำชกำร
+    แผ่นดิน พ.ศ. ๒๕๓๔`` — and that phrase survives recognition well enough to
+    recognise, even where the digits did not. Pairs are taken in order and each
+    layer slot is spent once, so a match cannot reach back past one already
+    used, and a slot with no convincing partner keeps what recognition read.
+    """
+    theirs = list(pattern.finditer(layer))
+    ours = list(pattern.finditer(text))
+    if not theirs or not ours:
+        return []
+    if len(theirs) == len(ours):
+        return list(zip(ours, theirs))
+    keys = [_surroundings(layer, m.start(), m.end()) for m in theirs]
+    pairs: list[tuple[re.Match[str], re.Match[str]]] = []
+    at = 0
+    for mine in ours:
+        key = _surroundings(text, mine.start(), mine.end())
+        best, alike = None, 0.0
+        for j in range(at, len(theirs)):
+            ratio = SequenceMatcher(None, key, keys[j]).ratio()
+            if ratio > alike:
+                best, alike = j, ratio
+        if best is None or alike < _SAME_SLOT:
+            continue
+        pairs.append((mine, theirs[best]))
+        at = best + 1
+    return pairs
+
+
+def _numerals_from_layer(text: str, layer: str) -> str:
+    """The recognised page's numbers, replaced by the ones its layer printed.
+
+    The fault that sends a page to recognition is a fault in its *letters* —
+    a font that collapsed ``า`` into ``ำ``, or a glyph table that slipped into
+    Latin-1. Neither touches the digits, so a collapsed layer still holds
+    ``พ.ศ. ๒๕๖๔`` exactly as the paper prints it. Recognition is the other way
+    round: it reads the body well and small print badly, and a Thai numeral is
+    the smallest print on the page.
+
+    Three documents showed the three ways it goes wrong. 100121 came back
+    ``พ.ศ. 25205`` for ``๒๕๖๔`` — malformed, and catchable by shape. 100021
+    came back ``พ.ศ. 2523`` for ``๒๕๖๓`` — a perfectly well-formed year that is
+    simply the wrong one, which no shape test can catch. 100015 came back
+    ``(ฉบับที on)`` for ``(ฉบับที่ ๓)`` — the digit gone entirely. 578
+    documents of the corpus carry at least one.
+
+    Only when the layer is collapsed rather than garbled: a glyph table that
+    slipped returns nonsense for digits too, and its numbers are worth no more
+    than the recognised ones. Each pattern is paired on its own by
+    ``_same_slot``, so a replacement cannot land on the wrong slot.
+    """
+    if not layer or looks_garbled(layer) or not looks_collapsed(layer):
+        return text
+    # The layer is still raw here — the repair runs before the normalising
+    # does, by design, so the recognised text can be corrected before anything
+    # else reads it. Raw means the Gazette's broken font writes its masthead in
+    # private-use codepoints, ``เล\uf70aม ๑๓๗``, and a pattern looking for
+    # ``เล่ม`` walks straight past the one slot on the page it was written for.
+    layer = normalize_text(repair_swapped_sara_aa(layer))
+    for pattern, title_slot in _FROM_LAYER:
+        pairs = _same_slot(pattern, layer, text)
+        if not pairs and title_slot:
+            # Nothing on the page read alike enough to pair, and this is a
+            # pattern whose first slot is the instrument's own — the year in
+            # the title, the amendment number beside it. That one is safe where
+            # the rest is not: it is set in the largest type on the sheet, it
+            # comes first on both sides, and every date column is built from
+            # it. Take it on position alone rather than leave the title unread.
+            theirs = next(pattern.finditer(layer), None)
+            mine = next(pattern.finditer(text), None)
+            if theirs and mine:
+                pairs = [(mine, theirs)]
+        taken = {mine.start(): theirs.group(2) for mine, theirs in pairs}
+        if taken:
+            text = pattern.sub(
+                lambda m: m.group(1) + taken.get(m.start(), m.group(2)), text
+            )
+    return text
+
+
 def _strip_headers(pages: list[Page]) -> None:
     """Repair the Thai, and keep exactly one copy of the running header.
 
@@ -451,12 +762,21 @@ def _strip_headers(pages: list[Page]) -> None:
     """
     seen = False
     for page in pages:
-        text = repair_swapped_sara_aa(page.text)
+        # Normalised before the numbers are read, not after. Recognition writes
+        # ``พ .ศ. ๒๕๓๔`` and ``พ.ศ.๒๕๓๔`` as readily as the spaced form, and
+        # normalising is what settles them into one shape. Doing it afterwards
+        # left three of 100015's eleven years invisible to the repair at the
+        # moment it ran and printed in the file a moment later, still holding
+        # the digits recognition guessed.
+        text = normalize_text(repair_swapped_sara_aa(page.text))
+        if page.layer:
+            text = _header_from_layer(text, page.layer)
+            text = _numerals_from_layer(text, page.layer)
         if seen:
             text = _RUNNING_HEADER.sub("", text)
         elif _RUNNING_HEADER.search(text):
             seen = True
-        page.text = normalize_text(text)
+        page.text = text
         # The layer gets the same treatment or it cannot be read either. A
         # broken Gazette font writes its header in private-use codepoints —
         # ``เล\uf70aม ๑๔๐`` — and ``normalize_text`` is what turns those into

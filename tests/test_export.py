@@ -15,7 +15,11 @@ from lawscan.merge import Row
 
 class TestColumns:
     def test_the_count_and_the_typos_are_deliberate(self):
-        assert len(COLUMNS) == 33
+        # 33 the operator numbers, plus ลำดับ, ชื่อไฟล์, ลิงค์PDF and
+        # ลิงค์เอกสารที่แนะนำ which their sheet carries without numbering, plus
+        # column 34 — the notification message, which is skipped unless asked
+        # for by name.
+        assert len(COLUMNS) == 38
         # Three headers in the operator's sheet end in a space. They look like
         # mistakes and they are not ours to fix.
         assert "ชื่อไฟล์ " in COLUMNS
@@ -224,3 +228,83 @@ class TestTheRowNumberBelongsToTheDocument:
 
         assert place_in_corpus("draft-a", 7) == "7"
         assert place_in_corpus("", 7) == "7"
+
+
+def test_the_two_repeal_columns_write_a_dash_when_there_is_nothing():
+    """V16 4.3 and 5.4: "หากไม่มี… ให้ใส่ -"
+
+    The model answers null, which is what this system's schema offers it for
+    "nothing found". The sheet wants the dash, so the dash is written here.
+    """
+    from lawscan.export.columns import to_dict
+    from lawscan.merge import Row
+
+    row = Row(document="100004")
+    got = to_dict(row, 1)
+    assert got["ยกเลิกกฎหมายอื่นทั้งฉบับ"] == "-"
+    assert got["แก้ไข/ยกเลิกบางส่วนของกฎหมายอื่น"] == "-"
+
+
+def test_a_real_answer_is_left_alone():
+    from lawscan.export.columns import to_dict
+    from lawscan.merge import Row
+
+    row = Row(document="100094")
+    row.put("ยกเลิกกฎหมายอื่นทั้งฉบับ", "ระเบียบทดสอบระบบ พ.ศ. 2563", "model")
+    assert to_dict(row, 1)["ยกเลิกกฎหมายอื่นทั้งฉบับ"] == "ระเบียบทดสอบระบบ พ.ศ. 2563"
+
+
+class TestAnAnnexeSitsBehindItsOwnDocument:
+    """The operator files ``1000012.1`` between 100012 and 100013, numbered 12.1.
+
+    Sorting on the file name as a string put it second in the sheet, directly
+    after 100001, because that is where ``1000012.1`` falls alphabetically.
+    """
+
+    def test_it_is_numbered_off_the_sheet_it_belongs_to(self):
+        from lawscan.export.columns import place_in_corpus
+
+        assert place_in_corpus("1000012.1", 99) == "12.1"
+        assert place_in_corpus("100012.1", 99) == "12.1"
+        assert place_in_corpus("100012", 99) == "12"
+
+    def test_it_sorts_between_its_document_and_the_next(self):
+        from lawscan.export.columns import in_corpus_order
+
+        names = ["100013", "100001", "1000012.1", "100012"]
+        assert sorted(names, key=in_corpus_order) == [
+            "100001", "100012", "1000012.1", "100013",
+        ]
+
+    def test_an_ordinary_document_is_untouched(self):
+        from lawscan.export.columns import place_in_corpus
+
+        assert place_in_corpus("100001", 99) == "1"
+        assert place_in_corpus("103424", 99) == "3424"
+
+    def test_a_name_that_is_not_a_number_falls_back_to_its_position(self):
+        from lawscan.export.columns import place_in_corpus
+
+        assert place_in_corpus("ทดสอบระบบ", 7) == "7"
+
+
+class TestTheNotificationColumnIsOptIn:
+    """Column 34 writes one message per V8 code. The operator's own note on it
+    reads "รันเฉพาะตอนเทสแจ้งเตือน ไม่รันทั้งหมด", and the cost agrees: the
+    corpus averages five codes a document, so running it by default would add
+    five prose answers to every scan."""
+
+    def test_the_column_exists(self):
+        assert "ข้อความแจ้งเตือน (Smart Prompt)" in COLUMNS
+
+    def test_it_is_not_asked_by_default(self):
+        from lawscan.llm.questions import ALL, BY_NAME
+
+        assert "notify" not in [q.name for q in ALL]
+        assert "notify" in BY_NAME
+
+    def test_it_is_not_scored(self):
+        """Neither answer file has the column, so there is nothing to compare."""
+        from lawscan.diff import UNSCORED
+
+        assert "ข้อความแจ้งเตือน (Smart Prompt)" in UNSCORED

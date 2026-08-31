@@ -207,8 +207,14 @@ _FENCE = re.compile(r"```")
 #: the outermost pair leaves ``ทรัพย์สิน>, <เงิน>, <ที่ดิน``, which is worse
 #: than leaving it alone. The second pass takes the odd one left over when the
 #: model closed a bracket it never opened.
-_BRACKETED = re.compile(r"<([^<>]*)>")
-_STRAY_BRACKET = re.compile(r"[<>]")
+_BRACKETED = re.compile(r"<(?!/?br\s*/?>)([^<>]*)>", re.IGNORECASE)
+_STRAY_BRACKET = re.compile(r"<(?!/?br\s*/?>)|(?<!br)(?<!br/)(?<!br )>", re.IGNORECASE)
+
+#: ``<br>`` is the one thing inside angle brackets that belongs in a cell.
+#: V16 asks for it by name in two columns — "บังคับให้ใช้แท็ก <br> เพื่อแยก
+#: บรรทัดเสมอ" — and the stripper above, written when the brackets meant "a
+#: name goes here", ate the brackets and left ``ทดเลขในใจbr0)`` glued together
+#: in every reasoning cell of a run. The model had sent it correctly.
 
 
 def _item(value: Any) -> str:

@@ -86,7 +86,9 @@ class TestNotPayingTwice:
 
     def test_parent_is_dropped_once_a_rule_filled_it(self):
         # Judgments. Not made under an act, so the type settles the column.
-        assert _answered_by_rules(PARENT, {"กฎหมายแม่": "-"})
+        assert _answered_by_rules(
+            PARENT, {"กฎหมายแม่": "-", "กฎหมายที่อ้างถึง": "-"}
+        )
 
     def test_parent_is_asked_when_no_rule_filled_it(self):
         assert not _answered_by_rules(PARENT, {"ประเภทกฎหมาย": "กฎกระทรวง"})
@@ -97,7 +99,9 @@ class TestNotPayingTwice:
     def test_a_dash_counts_as_an_answer(self):
         # A rule writes ``-`` where absence is a fact about the law, and that
         # is an answer the model cannot improve on.
-        assert _answered_by_rules(PARENT, {"กฎหมายแม่": "-"})
+        assert _answered_by_rules(
+            PARENT, {"กฎหมายแม่": "-", "กฎหมายที่อ้างถึง": "-"}
+        )
 
     def test_a_question_filling_many_columns_survives_one_of_them(self):
         # ``summary`` fills nine and the rules reach ``หมายเหตุ`` alone.
@@ -114,6 +118,40 @@ class TestNotPayingTwice:
         """A document answered entirely by rules would cost nothing — and would
         also mean the model is doing nothing, which is not true of this corpus.
         """
+        # ``parent`` is on this list since V17 gave it a second column: no rule
+        # reads which laws a document merely cites, so the question is always
+        # worth asking even where the parent act itself was settled by a rule.
         found = {"กฎหมายแม่": "-", "กลุ่มเป้าหมาย": "ผู้ดำรงตำแหน่งทางการเมือง"}
         left = [q.name for q in ALL if not _answered_by_rules(q, found)]
-        assert left == ["identity", "business", "summary"]
+        assert left == ["identity", "parent", "business", "support", "summary"]
+
+
+class TestAnAnnexeNumberIsTakenWhole:
+    """``1000012.1`` was read as ``100001`` and overwrote that document.
+
+    The number was found with a search for five or six digits anywhere in the
+    stem, so a seven-digit annexe matched on its first six. Nothing failed:
+    the annexe's text was written to ``text/100001.txt`` and the real
+    document's reading was gone, with the log cheerfully reporting the name it
+    had invented.
+    """
+
+    def _number(self, stem):
+        from pathlib import Path
+
+        from lawscan.ocr.read import Document
+
+        return Document(path=Path(f"{stem}.pdf"), pages=[]).number
+
+    def test_the_seven_digit_annexe_keeps_its_own_name(self):
+        assert self._number("1000012.1") == "1000012.1"
+
+    def test_an_ordinary_six_digit_document_is_unchanged(self):
+        assert self._number("100001") == "100001"
+        assert self._number("103424") == "103424"
+
+    def test_an_ordinary_annexe_keeps_its_suffix(self):
+        assert self._number("100012.1") == "100012.1"
+
+    def test_a_name_with_no_leading_number_falls_back_to_the_stem(self):
+        assert self._number("ทดสอบระบบ") == "ทดสอบระบบ"

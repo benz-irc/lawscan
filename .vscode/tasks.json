@@ -1,0 +1,71 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ฟรี · เทสต์ทั้งชุด",
+      "type": "shell",
+      "command": "./.venv/bin/pytest -q",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "ฟรี · ให้คะแนน CSV ที่เลือกไว้",
+      "type": "shell",
+      "command": "./.venv/bin/lawscan diff ${input:csv}",
+      "problemMatcher": []
+    },
+    {
+      "label": "ฟรี · กฎอ่านอะไรได้ (ฉบับที่เลือก)",
+      "type": "shell",
+      "command": "./.venv/bin/lawscan rules pdfs/${input:doc}.pdf",
+      "problemMatcher": []
+    },
+    {
+      "label": "ฟรี · ข้อความที่ OCR อ่านได้",
+      "type": "shell",
+      "command": "./.venv/bin/lawscan read pdfs/${input:doc}.pdf",
+      "problemMatcher": []
+    },
+    {
+      "label": "ฟรี · กฎอย่างเดียว สิบฉบับ ไม่เรียกโมเดล",
+      "type": "shell",
+      "command": "./.venv/bin/lawscan scan pdfs/10000[1-9].pdf pdfs/100010.pdf --no-llm --out out/rules10.csv --workdir out/rules10 && ./.venv/bin/lawscan diff out/rules10.csv",
+      "problemMatcher": []
+    },
+    {
+      "label": "เสียเงิน ~$0.015 · V15 หนึ่ง prompt สิบฉบับ",
+      "type": "shell",
+      "command": "./.venv/bin/lawscan scan pdfs/10000[1-9].pdf pdfs/100010.pdf --only v15 --out out/v15run.csv --workdir out/v15run --batch 5 && ./.venv/bin/lawscan diff out/v15run.csv",
+      "problemMatcher": []
+    },
+    {
+      "label": "เสียเงิน ~$0.023 · ห้าคำถามแบบเดิม สิบฉบับ",
+      "type": "shell",
+      "command": "./.venv/bin/lawscan scan pdfs/10000[1-9].pdf pdfs/100010.pdf --out out/five10.csv --workdir out/five10 --batch 5 && ./.venv/bin/lawscan diff out/five10.csv",
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "csv",
+      "type": "pickString",
+      "description": "CSV ไหน",
+      "default": "out/exp-v15/result.csv",
+      "options": [
+        "out/exp-five/result.csv",
+        "out/exp-v15/result.csv",
+        "out/exp-one/result.csv",
+        "out/exp-rules/result.csv",
+        "out/exp-v15-model-only.csv",
+        "out/spike-full.csv",
+        "out/spike-label.csv"
+      ]
+    },
+    {
+      "id": "doc",
+      "type": "promptString",
+      "description": "เลขเอกสาร เช่น 100002",
+      "default": "100002"
+    }
+  ]
+}

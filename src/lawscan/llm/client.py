@@ -37,11 +37,39 @@ from lawscan.rules import agencies
 
 log = logging.getLogger(__name__)
 
-#: Chosen by measurement rather than by version number. On the forty scored
-#: documents 3.5-flash reaches 66.5% and 2.5-flash 65.1% — a point and a half —
-#: and 2.5-flash costs a quarter as much, which is 235 baht per thousand
-#: documents against 905. The comparison is kept under tests/models.
-MODEL = os.environ.get("LAWSCAN_MODEL", "gemini-2.5-flash")
+#: Sampling temperature for every provider. Extraction wants the same answer
+#: to the same question, and measurement wants the difference between two runs
+#: to be the change under test rather than the sampler.
+TEMPERATURE = 0.0
+
+#: Chosen by measurement, not by version number. On forty scored documents,
+#: one prompt, the same text, the same day:
+#:
+#:     gpt-5.4-mini   53.2%      $0.056 / 40 documents
+#:     gpt-5.5        51.4%      $0.058
+#:     gpt-5.4        50.9%      $0.074
+#:     gpt-5.6-sol    48.0%      $0.054
+#:     gpt-5-nano     42.0%      $0.019
+#:
+#: Bigger is not better here and newer is not better either: the two models
+#: above mini in every list both score below it. Nano is a quarter of the price
+#: and eleven points worse, and those eleven points are the columns that need a
+#: judgement — business codes, tags, the audience. On the five-question path
+#: the same swap moved 63.3% to 68.7%.
+#: ``gemini-3.1-flash-lite`` is the default because every run this year has
+#: set it on the command line anyway, and the value it was overriding could
+#: not answer at all: the OpenAI account has no credits, so a plain
+#: ``lawscan scan`` failed on every document with a 429 rather than doing
+#: anything. Compared against ``gemini-3.1-pro-preview`` on the same twenty-two
+#: documents and the same prompts, pro reads the core column better — 60%
+#: against 49%, and 80 of the key's codes against 63 — for 44 baht a run
+#: against 5, and about three times the wall clock. The operator chose the
+#: cheaper one; pro is a scan away with ``LAWSCAN_MODEL`` when a run is going
+#: out for review.
+#: ``or`` and not ``get``'s default: ``LAWSCAN_MODEL=`` set to nothing is how
+#: a shell says "use the default", and reading it literally asks the provider
+#: for a model with no name.
+MODEL = os.environ.get("LAWSCAN_MODEL") or "gemini-3.1-flash-lite"
 
 #: Only to skip prompts that obviously cannot be cached. The real floor is the
 #: provider's — "Cached content is too small. total_token_count=202,
@@ -181,10 +209,21 @@ class Client:
         return question.prompt(self.lists())
 
     # ------------------------------------------------------------------ ask
-    def ask(self, question: Question, document: Document) -> Answer:
-        """Put one question to the model about one document."""
+    def ask(self, question: Question, document: Document,
+            preamble: str = "") -> Answer:
+        """Put one question to the model about one document.
+
+        ``preamble`` rides in front of the document text, not in front of the
+        instruction. ``notify`` needs the codes the other questions settled on
+        — its prompt says "รหัสที่ส่งมาให้พร้อมเอกสารนี้" and forbids inventing
+        any — and those differ per document. Putting them in the instruction
+        would give every document a different prompt and lose the cache that
+        makes this affordable; the body is where per-document facts belong.
+        """
         instruction = self.prompt_for(question)
         body = fit(document.text(), head=question.chars, tail=question.tail_chars)
+        if preamble:
+            body = f"{preamble}\n\n{body}"
         answer = Answer(question=question.name, document=document.number, ok=False,
                         model=self.model)
 
@@ -210,6 +249,12 @@ class Client:
             cached_content=cache,
             response_mime_type="application/json",
             response_schema=_gemini_schema(question.schema),
+            # Zero, because this is extraction and not writing. Left unset, the
+            # provider's default sampled: five runs of the same twenty-two
+            # documents against the same prompts scored 80.0, 80.1, 80.6, 80.3
+            # and 80.3, and single columns moved as much as nineteen points
+            # between runs. A change worth a point cannot be seen through that.
+            temperature=TEMPERATURE,
             # Milliseconds, and per request rather than per run.
             http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT * 1000),
         )
@@ -279,6 +324,7 @@ class Client:
             "model": self.model,
             "messages": openai_chat.messages(system, body),
             "response_format": openai_chat.response_format(question, provider),
+            "temperature": TEMPERATURE,
         }
         effort = openai_chat.reasoning_effort(self.model, provider)
         if effort:

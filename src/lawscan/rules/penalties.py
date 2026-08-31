@@ -46,7 +46,16 @@ class PenaltyBand(StrEnum):
 _RED = (
     "ประหารชีวิต",
     "จำคุก",
-    "กักขัง",
+    # ``โทษกักขัง``, not ``กักขัง``. Detention is a criminal penalty and a cage
+    # is not, and Thai spells them the same: 118 pages of the corpus carry the
+    # bare word and eleven documents carry it with no other criminal word
+    # anywhere — ``ภาชนะสิ่งห่อหุ้มหรือกักขังสัตว์``, ``สัตว์น้ำในที่กักขัง``,
+    # ``สถานกักขัง`` in a list of prison-made goods. Each of those was read as
+    # a criminal penalty and banded red on the strength of it.
+    #
+    # Nothing is lost by the narrowing: a page that really imposes detention
+    # says ``ระวางโทษ`` or ``จำคุก`` beside it, and both are already here.
+    "โทษกักขัง",
     "ระวางโทษปรับ",
     "ปรับทางอาญา",
     "ริบทรัพย์สิน",
@@ -273,14 +282,74 @@ def read(text: str, law_type_code: str | None) -> Reading:
 #: ``รอเชื่อมโยง:`` in the penalty column. Two columns, one decision.
 LINKED_BAND = "โทษเชื่อมโยงจากกฎหมายแม่"
 
+#: How a linked penalty opens, whoever wrote it. The pipeline reads the cell
+#: back to decide the band, and it has to recognise the model's answer as
+#: readily as this file's own.
+LINKED_PREFIX = "รอเชื่อมโยง"
+
 #: Bands that mean "this document states no penalty of its own". A document
 #: that does state one is not waiting on anything.
 _SILENT = frozenset({"GREEN", "GREY", "UNKNOWN"})
 
+#: An answer that only says there is no penalty. The sheet writes that as a
+#: dash — across the operator's 240 rows the words below appear in this column
+#: zero times — so an answer in these words is the right answer wearing the
+#: wrong vocabulary, and it is scored as if it named a punishment.
+#: The answer says there is no punishment, however the model chose to phrase
+#: it. The list grew each time a run produced a new wording — ``ไม่มีโทษ``,
+#: then ``ไม่มีโทษ เนื่องจาก…``, then ``ไม่มีข้อกำหนดโทษสำหรับภาคธุรกิจ…`` —
+#: which is why this matches a shape rather than a phrase: opens with ``ไม่``,
+#: reaches ``โทษ`` within a few words, and never names a punishment.
+_DENIES_A_PENALTY = re.compile(r"^ไม่(?:มี|ได้|ปรากฏ|ระบุ)[^โ]{0,24}โทษ")
 
-#: Words that make an instrument a relief rather than a duty. A regulation
-#: that waives a fee has nothing to punish, so it is not waiting on its parent
-#: act for a penalty — the operator files these as no-impact.
+#: Words that name an actual punishment. One of these anywhere means the cell
+#: is describing a consequence, not denying one, whatever it opens with —
+#: ``ไม่มีโทษจำคุก แต่ปรับ…`` must survive.
+_NAMES_ONE = re.compile(
+    r"จำคุก|ปรับ|เพิกถอน|พักใช้|สั่งปิด|ริบ|โมฆะ|ชดใช้|ยึด|อายัด|กักขัง|ประหาร")
+
+_NO_PENALTY = re.compile(
+    r"^(?:ไม่ได้)?(?:ไม่)?(?:มี|ระบุ|ปรากฏ|กำหนด)?\s*"
+    r"(?:บท)?(?:ลงโทษ|โทษ)\s*"
+    r"(?:ใน(?:เอกสาร|กฎหมาย)?(?:ฉบับ)?นี้)?\s*$"
+)
+
+
+#: An explanation trailing the answer, in brackets or after a dash.
+_TRAILING_REASON = re.compile(
+    r"\s*[(（\[].*$"          # วงเล็บอธิบาย
+    r"|\s+[-–—:：]\s.*$"      # ขีดหรือทวิภาคคั่น
+    r"|\s*(?:เนื่องจาก|เพราะ|โดยที่|ด้วยเหตุที่).*$")  # คำเชื่อมบอกเหตุ
+
+
+def plain(value: str) -> str:
+    """``value``, or ``-`` when all it says is that there is no penalty.
+
+    The statement often arrives with its reasoning in brackets behind it —
+    ``ไม่มีโทษ (คำวินิจฉัยฉบับนี้ไม่ได้สั่งลงโทษผู้ใด)``. The bracket explains the
+    answer rather than adding to it, so it is read off before the check and
+    goes nowhere: the column holds the punishment, and there is none.
+    """
+    text = " ".join((value or "").split())
+    if not text:
+        return text
+    head = _TRAILING_REASON.sub("", text)
+    stripped = head.replace(" ", "")
+    if stripped.startswith("ไม่") and _NO_PENALTY.match(stripped):
+        return "-"
+    if _DENIES_A_PENALTY.match(stripped) and not _NAMES_ONE.search(stripped):
+        return "-"
+    return text
+
+
+#: Words that read as relief rather than duty. Once used to stop a document
+#: from being filed as waiting on its parent act — a regulation that waives a
+#: fee having nothing to punish — and taken out again: a regulation that sets
+#: fees *and* waives some of them still tells a business what to pay, and the
+#: title is the wrong place to look for that. Measured over the twenty-two, the
+#: guard cost one document and saved none.
+#:
+#: Kept because the band reader still uses it to tell relief from obligation.
 _RELIEF = ("ยกเว้น", "ลดหย่อน", "งดเว้น", "คืนเงิน", "ผ่อนผัน")
 
 
@@ -295,7 +364,26 @@ def amends(text: str) -> bool:
     return bool(_found(_SPACES.sub("", text), _GREY))
 
 
-def is_housekeeping(band: str, core: str) -> bool:
+#: The register's state-authority families. A code from one of these says the
+#: document binds an arm of the state, which is a different thing from binding
+#: a business — and the core column now carries one on documents that bind
+#: nobody else, because V19 rule 5.9 asks for the issuing body's own code.
+_STATE_FAMILIES = ("CC", "CE", "CA")
+
+
+def _binds_a_business(core: str) -> bool:
+    """Whether ``core`` names anyone outside the state.
+
+    Reading "core is not empty" was enough while an internal regulation left
+    the column empty. Once it carries the issuing body's own code, that test
+    starts calling a staff-travel regulation a document whose penalty waits in
+    its parent act — which flips both this column and the risk band.
+    """
+    codes = [c.strip() for c in _clean(core).split(",") if c.strip()]
+    return any(not c.startswith(_STATE_FAMILIES) for c in codes)
+
+
+def is_housekeeping(band: str, core: str, penalty: str = "") -> bool:
     """Government-internal, on the two signals that actually separate it.
 
     ``_BLUE`` looks for the words a housekeeping instrument uses, and misses
@@ -309,8 +397,18 @@ def is_housekeeping(band: str, core: str) -> bool:
     codes came back empty — nobody outside the issuing body has anything to do.
     On the 27 documents where both hold, 17 are 🔵 ฟ้า and 7 are ⚪️ เทา, against
     the 7-right/17-wrong the phrase list manages on its own.
+
+    An empty core column is half the test, and it stopped being reliable on its
+    own: a model that finds no business code has either read a housekeeping
+    instrument or simply missed the businesses. ``penalty`` settles which. A
+    model that wrote ``รอเชื่อมโยง:`` has said outright that somebody outside
+    the issuing body is bound and the punishment lives in the parent act —
+    which is the opposite of housekeeping, and overruling it turned a right
+    answer into a dash on 100021, taking the risk band with it.
     """
-    return band == "GREEN" and not _clean(core)
+    if _clean(penalty).startswith(LINKED_PREFIX):
+        return False
+    return band == "GREEN" and not _binds_a_business(core)
 
 
 def links_to_parent(*, band: str, parent: str, core: str, title: str = "",
@@ -330,9 +428,7 @@ def links_to_parent(*, band: str, parent: str, core: str, title: str = "",
     """
     if amending:
         return False
-    if any(word in (title or "")[:60] for word in _RELIEF):
-        return False
-    return bool(_clean(parent)) and bool(_clean(core)) and band in _SILENT
+    return bool(_clean(parent)) and _binds_a_business(core) and band in _SILENT
 
 
 def link_text(parent: str) -> str:

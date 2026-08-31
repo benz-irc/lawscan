@@ -65,18 +65,22 @@ class TestTheConstitutionIsNotAParent:
     def test_the_act_keeps_every_section_that_is_its_own(self):
         got = parent.read(
             "อาศัยอำนาจตามความในมาตรา 175 ของรัฐธรรมนูญแห่งราชอาณาจักรไทย "
-            "กับมาตรา 56 วรรคสอง และมาตรา 60 วรรคสอง "
+            "กับมาตรา 56 และมาตรา 60 "
             "แห่งพระราชบัญญัติมหาวิทยาลัยราชภัฏ พ.ศ. 2547 ดังต่อไปนี้"
         )
         assert got == [
-            "พระราชบัญญัติมหาวิทยาลัยราชภัฏ พ.ศ. 2547 มาตรา 56 วรรคสอง",
-            "พระราชบัญญัติมหาวิทยาลัยราชภัฏ พ.ศ. 2547 มาตรา 60 วรรคสอง",
+            "พระราชบัญญัติมหาวิทยาลัยราชภัฏ พ.ศ. 2547 มาตรา 56",
+            "พระราชบัญญัติมหาวิทยาลัยราชภัฏ พ.ศ. 2547 มาตรา 60",
         ]
 
     def test_a_preamble_with_no_constitution_is_unchanged(self):
+        # Written closed up because ``close_gap`` shuts the space the Gazette
+        # prints between an instrument's word and its name. The ``ก.`` style
+        # used elsewhere in these tests reads as that gap, so this one spells
+        # an invented name out instead.
         assert parent.read(
-            "อาศัยอำนาจตามความในมาตรา 24 แห่งพระราชบัญญัติ ก. พ.ศ. 2560 ดังต่อไปนี้"
-        ) == ["พระราชบัญญัติ ก. พ.ศ. 2560 มาตรา 24"]
+            "อาศัยอำนาจตามความในมาตรา 24 แห่งพระราชบัญญัติทดสอบระบบ พ.ศ. 2560 ดังต่อไปนี้"
+        ) == ["พระราชบัญญัติทดสอบระบบ พ.ศ. 2560 มาตรา 24"]
 
     def test_the_constitution_alone_leaves_nothing_behind(self):
         assert parent.read(

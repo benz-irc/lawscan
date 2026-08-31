@@ -67,6 +67,12 @@ PROVIDERS: dict[str, Provider] = {
         "moonshot", "https://api.moonshot.ai/v1",
         ("MOONSHOT_API_KEY", "KIMI_API_KEY"), strict=False,
     ),
+    # A fourth house speaking the same API. Here because a corpus this size is
+    # measured over days and a prepayment can run out mid-afternoon: when it
+    # does, the work stops for want of a second key, not for want of an idea.
+    "minimax": Provider(
+        "minimax", "https://api.minimax.io/v1", ("MINIMAX_API_KEY",), strict=False
+    ),
 }
 
 

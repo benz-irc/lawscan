@@ -197,3 +197,32 @@ def named_in(text: str, items) -> list[str]:
     """
     return [item for item in items
             if (head := _head(item)) and head in (text or "")]
+
+
+#: A hand-written list marker at the head of an entry: ``1)`` ``2.`` ``3 -``.
+#: Anchored, so the ``1`` in ``บัญชีหมายเลข 1 อัตราค่าเบี้ยเลี้ยง`` is left alone —
+#: that digit is part of the document's name, not a position in a list.
+_NUMBERED = re.compile(r"^\s*\(?\d{1,2}\s*[).\-]\s+")
+
+
+def unnumbered(items) -> list[str]:
+    """The same entries without the list markers the model wrote into them.
+
+    The column is a list of documents and the sheet joins it with commas, so a
+    number in front of each entry is a second numbering on top of the first —
+    and an inconsistent one: over twenty-two documents the model numbered
+    fourteen of them and left the rest bare, which is worse than either choice
+    on its own because a reader cannot tell whether ``1)`` means anything.
+
+    Stripping here rather than asking the prompt for it, because the prompt has
+    asked twice and the marker keeps coming back; a list is a list whatever the
+    model decides to decorate it with.
+    """
+    out = []
+    for item in items or []:
+        if not item:
+            continue
+        text = _NUMBERED.sub("", str(item)).strip()
+        if text:
+            out.append(text)
+    return out

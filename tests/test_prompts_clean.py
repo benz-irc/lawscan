@@ -19,14 +19,47 @@ from pathlib import Path
 
 import pytest
 
+from lawscan.export.columns import COLUMNS
+
 csv.field_size_limit(10**8)
 
 ROOT = Path(__file__).resolve().parent.parent
-EXPECTED = ROOT / "data" / "expected.csv"
+#: The reference lives outside data/ so no prompt can draw from it. This
+#: test needs it, and pointing at the old place silently disarmed nine checks
+#: the moment the file moved — a leak guard that skips is worse than none.
+EXPECTED = ROOT / "reference" / "expected.csv"
 PROMPTS = sorted((ROOT / "prompts").glob("*.md"))
 
 #: A value this long, appearing word for word, is not shared vocabulary.
 TOO_LONG = 25
+
+#: And one item out of a list this long is not shared vocabulary either.
+#: Lower than ``TOO_LONG`` because an item is one group, not a whole cell.
+#:
+#: Twenty rather than sixteen, and the four characters were paid for: at
+#: sixteen the guard fires on ``ขอรับหนังสือรับรอง`` and ``พนักงานเจ้าหน้าที่``,
+#: which are ordinary Thai that any prompt about permits has to be able to
+#: say. At twenty it still catches a named trade or a named right, which is
+#: what a leak looks like.
+DISTINCTIVE = 20
+
+#: Where an item on its own is checked. These three name a party or a right —
+#: things the model can only get from the document or from being told, so one
+#: of them sitting in a prompt is a worked answer.
+#:
+#: The tag and keyword columns are left out on purpose. They share their
+#: vocabulary with the taxonomy and with the category table ``parent.md`` ships
+#: as its own fallback answers, so item-level matching there fires on the
+#: prompt doing its job — ``ระเบียบบริหารราชการแผ่นดิน`` is a category this
+#: repository assigns, and also, unavoidably, the name of a real act.
+#: Column headings, which every prompt names and no prompt may be faulted for.
+HEADINGS = {c.strip() for c in COLUMNS}
+
+ITEMWISE = {
+    "กลุ่มเป้าหมาย",
+    "ใบอนุญาต",
+    "คู่มือ แบบฟอร์ม เอกสารที่แนะนำ ",
+}
 
 #: Columns whose values are prose the model has to compose. A leak here is a
 #: worked answer; the same test on a column like ``ประเภทกฎหมาย``, whose whole
@@ -34,7 +67,7 @@ TOO_LONG = 25
 COMPOSED = {
     "กลุ่มเป้าหมาย",
     "ใบอนุญาต",
-    "คู่มือ แบบฟอร์ม เอกสารที่แนะนำ",
+    "คู่มือ แบบฟอร์ม เอกสารที่แนะนำ ",
     "Activity_Tag",
     "Product_Group_Tag",
     "Legal_Keyword_Tag",
@@ -61,6 +94,26 @@ def answers() -> dict[str, tuple[str, str]]:
                     continue
                 if len(value) > TOO_LONG or "," in value:
                     found[value] = (document, column.strip())
+                # And each item on its own. A cell listing several groups
+                # leaks just as badly one group at a time, and the whole-cell
+                # test could not see it: an example naming two of the groups a
+                # document's row happens to hold sat in the audience prompt for
+                # weeks, because the row wrote them with a space between and
+                # the guard was looking for the pair.
+                if column in ITEMWISE:
+                    # Split on spaces as well as commas. The row this guard
+                    # was written for writes its two groups with a space
+                    # between them, so a comma-only split saw one item forty
+                    # characters long and never looked inside it — while the
+                    # prompt held one of the two, word for word.
+                    for item in re.split(r"[,·\s]+", value):
+                        item = item.strip()
+                        # A column's own name is not a leak. One row answers
+                        # ``องค์กรปกครองส่วนท้องถิ่น`` and that is also the
+                        # heading of a column every prompt has to be able to
+                        # name.
+                        if len(item) >= DISTINCTIVE and item not in HEADINGS:
+                            found.setdefault(item, (document, column.strip()))
     return found
 
 
@@ -160,3 +213,205 @@ def test_no_example_names_a_real_instrument(prompt):
         f"{prompt.name} ยกชื่อกฎหมายจริงมาเป็นตัวอย่าง: {real} — "
         "ใช้ชื่อสมมติที่ไม่มีในคลัง เพื่อไม่ให้ลอกไปเป็นคำตอบได้"
     )
+
+
+def test_no_tag_vocabulary_is_shipped_to_the_model():
+    """A list of the database's own tag names was tried, and cost more than it paid.
+
+    The idea was sound on paper: the operator reuses their own vocabulary, and
+    a little over half the tags on any new document have been written before,
+    so a register of the terms already in the database — built only from
+    documents the score never looks at — should let the model land on the
+    spelling that is already there instead of inventing a synonym.
+
+    Measured on the 240, it moved ``Activity_Tag`` from 28.5% to 15.9% and
+    ``Product_Group_Tag`` from 37.0% to 31.0%. The register stopped being a
+    hint and became a menu: the share of answers lifted from it went from 30%
+    to 79%, and what came back was the shortest entry that fit — ``ตรวจสอบ``
+    and ``อายัด`` where the page says ``ตรวจสอบทรัพย์สิน`` and
+    ``อายัดทรัพย์สิน``. A model given a list of acceptable answers stops
+    reading the document and starts satisfying the list.
+
+    So there is no ``data/tags.txt``, and this is the test that says why. The
+    lists that remain — the taxonomy and the register of regulators — are
+    different in kind: their entries are codes and official names that the
+    answer must match exactly, not phrases the document is supposed to supply.
+    """
+    from pathlib import Path
+
+    assert not Path("data/tags.txt").exists(), (
+        "data/tags.txt กลับมาแล้ว — วัดครั้งก่อนมันทำให้ Activity_Tag ตกจาก 28.5% เหลือ 15.9% "
+        "ถ้าจะลองใหม่ ให้วัดทั้ง 240 ฉบับก่อนเก็บไว้"
+    )
+
+
+class TestSuggestNewSurvivesTheCodeFilter:
+    """The one answer V16 allows that is not a code.
+
+    The filter keeps only codes the register defines, which is right for the
+    prose the model sometimes writes into these columns and wrong for
+    ``[SUGGEST_NEW]``. That is the answer to a real question — the business is
+    there and the register has no name for it — and dropping it left the cell
+    blank, which reads as "nothing found" rather than "nothing fits".
+    """
+
+    def test_it_is_kept(self):
+        from lawscan.rules.categories import codes_in
+
+        assert codes_in("[SUGGEST_NEW]") == ["[SUGGEST_NEW]"]
+        assert codes_in("SUGGEST_NEW") == ["[SUGGEST_NEW]"]
+
+    def test_a_real_code_is_still_kept(self):
+        from lawscan.rules.categories import codes_in
+
+        assert "CC24" in codes_in("CC24 วินัยการเงินการคลังภาครัฐ")
+
+    def test_an_invented_code_is_still_dropped(self):
+        from lawscan.rules.categories import codes_in
+
+        assert codes_in("ZZ99") == []
+
+
+class TestTheAnswerKeyCannotReachTheModel:
+    """The reference file lives outside every folder a prompt can draw from.
+
+    ``Client.lists`` fills a ``{{name}}`` placeholder from ``data/<name>.txt``,
+    and the reference used to sit in that same folder. Nothing was leaking —
+    the loader takes ``.txt`` and the file is ``.csv`` — but a rename or a new
+    loader would have been enough, and the guard was a file extension. It now
+    lives in ``reference/``, which nothing in the sending path reads.
+    """
+
+    def test_the_reference_is_not_in_the_prompt_data_folder(self):
+        from pathlib import Path
+
+        assert not Path("data/expected.csv").exists(), (
+            "ไฟล์เฉลยกลับเข้าไปอยู่ใน data/ ซึ่งเป็นโฟลเดอร์ที่ prompt ดึงไปเติม"
+        )
+        assert Path("reference/expected.csv").exists()
+
+    def test_nothing_a_prompt_can_load_holds_reference_answers(self):
+        import csv
+        from pathlib import Path
+
+        reference = Path("reference/expected.csv")
+        if not reference.exists():
+            pytest.skip("ไม่มีไฟล์อ้างอิงบนเครื่องนี้")
+        with reference.open(encoding="utf-8-sig") as fh:
+            rows = list(csv.DictReader(fh))
+        # Long free-text answers: distinctive enough that a match is a leak.
+        answers = {
+            (r.get("คำอธิบายและสรุปสาระสำคัญ") or "").strip()
+            for r in rows
+        } - {""}
+        answers = {a for a in answers if len(a) > 80}
+        loadable = "\n".join(
+            p.read_text(encoding="utf-8") for p in Path("data").glob("*.txt")
+        ) + "\n".join(p.read_text(encoding="utf-8") for p in Path("prompts").glob("*.md"))
+        leaked = sorted(a for a in answers if a in loadable)
+        assert not leaked, f"คำตอบจากไฟล์เฉลยโผล่ในสิ่งที่ส่งให้โมเดล: {leaked[:1]}"
+
+
+#: What the operator's registers legitimately contain, counted against both
+#: answer files. Ministry names, department names and business-category names
+#: are in the sheet *and* in the registers the operator supplied, and always
+#: were — so a match is not by itself a leak. The number is.
+#:
+#: Raised only when a register genuinely grows for a reason that has nothing to
+#: do with the answers, and the commit that raises it has to say so.
+CONTACT = 1217
+
+
+def _payload() -> str:
+    """Every character that reaches the model, prompts and registers alike.
+
+    The old guard read ``data/*.txt`` and stopped there, which is how two
+    initialisms copied out of the answer sheet reached ``data/agencies.json``
+    and were sent with every request for a day without anything noticing. The
+    file is JSON, so the glob never saw it.
+    """
+    files = [*sorted(Path("data").glob("*.txt")),
+             *sorted(Path("data").glob("*.json")),
+             *sorted(Path("prompts").rglob("*.md"))]
+    return re.sub(r"\s+", "", "\n".join(
+        p.read_text(encoding="utf-8") for p in files))
+
+
+def test_no_new_answer_text_reaches_the_model():
+    """The count of answer strings reachable in the payload may not grow.
+
+    A rule learned by measuring against the answers is allowed — the operator
+    asks for it. Copying a *value* out of them is not, and the two are easy to
+    confuse when the thing measured happens to be a value. This counts instead
+    of forbidding: everything already matched stays matched, and the moment a
+    register gains a string the sheet contains, the number moves and the test
+    says so.
+    """
+    payload = _payload()
+    seen = 0
+    for ref in (ROOT / "reference/expected.csv", ROOT / "reference/expected22.csv"):
+        if not ref.exists():
+            continue
+        with ref.open(encoding="utf-8-sig") as fh:
+            for row in csv.DictReader(fh):
+                for cell in row.values():
+                    for item in re.split(r"[,·;|\n]+", cell or ""):
+                        item = item.strip()
+                        if len(item) >= 12 and re.sub(r"\s+", "", item) in payload:
+                            seen += 1
+    assert seen <= CONTACT, (
+        f"ข้อความจากไฟล์เฉลยโผล่ในสิ่งที่ส่งให้โมเดลเพิ่มขึ้น {seen - CONTACT} ชิ้น "
+        f"(เดิม {CONTACT}) — มีค่าจากเฉลยถูกคัดเข้า data/ หรือ prompts/ หรือไม่")
+
+
+class TestNoRegisterNameIsWrittenIntoAPrompt:
+    """A category name in the instruction is a candidate answer in disguise.
+
+    The register is already sent to the model as data; naming one of its
+    categories in the instruction as well turns that name into a shortlist.
+    It cost a real answer: a four-item list of state-side category names was
+    added to ``business.md`` as an illustration, and on 100001 the model took
+    the fourth item off the list — ``CC28 องค์การมหาชน`` — for an ombudsman's
+    office that the agency register files under ``องค์กรอิสระ``. The run
+    before, with no list to pick from, had read the document and answered
+    ``BY1``.
+
+    The names had also been chosen right after reading the operator's answers,
+    which is the leak the rule against answers in the prompt exists to stop —
+    a leak this file's other guard cannot see, because the strings are
+    register text rather than answer text.
+    """
+
+    def test_no_prompt_the_flow_sends_names_a_category(self):
+        import re
+        from pathlib import Path
+
+        names = {}
+        for path in list(Path("data").glob("*.txt")) + list(Path("data").glob("*.json")):
+            text = path.read_text(encoding="utf-8")
+            for m in re.finditer(r"\b([A-Z]{1,2}\d{1,2})\s*(?:\[[A-Z]+\])?\s*=\s*([^\n\",\\]+)", text):
+                name = re.sub(r"\s*\[[A-Z]+\]\s*$", "", m.group(2)).strip()
+                # Twelve, the same length the answer-leak guard beside this one
+                # uses, and for the same reason: shorter than that and a
+                # category name is an ordinary Thai noun the instruction may
+                # legitimately need — ``การส่งเสริม`` is both a register entry
+                # and the plain word for promotion. Names of twelve characters
+                # or more are specific enough that writing one is a choice.
+                if len(name) >= 12:
+                    names[name] = m.group(1)
+        assert names, "อ่านทะเบียนไม่ได้ — เทสต์นี้จะผ่านโดยไม่ตรวจอะไรเลย"
+
+        # The five the pipeline sends, plus the notification prompt. The
+        # operator's own prompts kept under ``prompts/`` are theirs as written.
+        sent = ("business.md", "identity.md", "parent.md", "audience.md",
+                "summary.md", "notify.md")
+        found = [
+            f"{f} · {names[name]} = {name}"
+            for f in sent
+            for name in names
+            if name in Path("prompts", f).read_text(encoding="utf-8")
+        ]
+        assert not found, (
+            "ชื่อหมวดจากทะเบียนโผล่ในคำสั่ง — โมเดลจะหยิบจากรายการแทนที่จะเปิดอ่าน:\n  "
+            + "\n  ".join(found)
+        )
