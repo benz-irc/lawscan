@@ -186,8 +186,6 @@ def _effective_long_after_publication(document: Document, row: Row) -> Finding |
     number of days. A gap of years normally means a date was read out of a
     citation of some older law.
     """
-    from lawscan.rules import THAI_MONTHS
-
     published, effective = row.value("ปีที่ประกาศ"), row.value("วันทีมีผลใช้บังคับ")
     if not published or not effective or effective == "-":
         return None

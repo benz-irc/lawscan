@@ -66,7 +66,7 @@ lawscan scan pdfs/ --out out/r.csv --workdir out/     # pipeline ดิบ ค�
 lawscan scan pdfs/ --no-llm --out out/r.csv           # กฎอย่างเดียว ฟรี
 lawscan scan pdfs/ --reuse  --out out/r.csv           # ประกอบใหม่จากคำตอบเดิม
 
-LAWSCAN_MODEL=gpt-5-nano lawscan scan pdfs/  # เปลี่ยนโมเดล/ค่าย (gpt · deepseek · kimi · gemini)
+LAWSCAN_MODEL=gemini-3.1-flash-lite lawscan scan pdfs/  # เปลี่ยนโมเดล/ค่าย (gemini · gpt · deepseek · kimi)
 LAWSCAN_EFFORT=minimal ...                 # เฉพาะ gpt-5/o-series: คุมโทเคนคิด
 
 lawscan diff out/r.csv                     # เทียบ

@@ -342,6 +342,11 @@ ONE = Question(
 #: Not in ``ALL`` either. Reached with ``--only v15``.
 V15 = replace(ONE, name="v15")
 
+#: The same again, one revision on. Wired rather than left as a file in the
+#: folder: ``prompts/v16.md`` was reachable by nothing, which reads as a prompt
+#: in use until someone greps for it.
+V16 = replace(ONE, name="v16")
+
 #: Column 34 — one notification message per V8 code, for the alert screen
 #: rather than for the sheet.
 #:
@@ -373,7 +378,7 @@ def notify_for(codes: tuple[str, ...]) -> Question:
 
 
 ALL: tuple[Question, ...] = (IDENTITY, PARENT, AUDIENCE, BUSINESS, SUPPORT, SUMMARY)
-BY_NAME = {q.name: q for q in (*ALL, ONE, V15, NOTIFY)}
+BY_NAME = {q.name: q for q in (*ALL, ONE, V15, V16, NOTIFY)}
 
 
 def filled_by() -> dict[str, str]:

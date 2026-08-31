@@ -581,6 +581,7 @@ _FIELDS: dict[str, dict[str, str]] = {
 # lands in the same columns. Shared rather than copied: two dictionaries that
 # have to stay identical are one dictionary that will not.
 _FIELDS["v15"] = _FIELDS["one"]
+_FIELDS["v16"] = _FIELDS["one"]
 
 
 #: Columns the model writes as a list and repeats itself in. The tag prompt

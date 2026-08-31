@@ -415,3 +415,26 @@ class TestNoRegisterNameIsWrittenIntoAPrompt:
             "ชื่อหมวดจากทะเบียนโผล่ในคำสั่ง — โมเดลจะหยิบจากรายการแทนที่จะเปิดอ่าน:\n  "
             + "\n  ".join(found)
         )
+
+
+class TestEveryPromptIsReachable:
+    """A prompt file nothing loads reads as a prompt in use.
+
+    ``prompts/v16.md`` sat beside ``v15.md`` for weeks with no question behind
+    it, so anyone reading the folder would have taken it for the live version.
+    """
+
+    def test_every_prompt_file_has_a_question(self):
+        from pathlib import Path
+
+        from lawscan.llm.questions import BY_NAME
+
+        folder = Path(__file__).resolve().parent.parent / "prompts"
+        loose = sorted(p.stem for p in folder.glob("*.md") if p.stem not in BY_NAME)
+        assert loose == [], f"prompt ที่ไม่มีคำถามโหลด: {loose}"
+
+    def test_every_question_has_a_prompt_file(self):
+        from lawscan.llm.questions import BY_NAME
+
+        missing = sorted(name for name, q in BY_NAME.items() if not q.path.exists())
+        assert missing == [], f"คำถามที่ไม่มีไฟล์ prompt: {missing}"

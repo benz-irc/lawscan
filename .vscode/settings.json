@@ -7,11 +7,10 @@
   "python.testing.unittestEnabled": false,
   "python.testing.pytestArgs": ["tests"],
 
-  // คีย์ Gemini ในเครื่องเครดิตหมด ถ้าไม่ตั้งตัวนี้ทุกคำสั่งที่เรียกโมเดลจะล้ม
-  // ด้วย 429 RESOURCE_EXHAUSTED ตั้งไว้ที่นี่แล้ว terminal ใน VS Code ได้ทุกหน้าต่าง
-  "terminal.integrated.env.osx": {
-    "LAWSCAN_MODEL": "gpt-5-nano"
-  },
+  // ไม่ตั้ง LAWSCAN_MODEL ไว้ที่นี่ — เคยตั้งเป็น gpt-5-nano ตอนเครดิต Gemini หมด
+  // แล้วสถานการณ์กลับด้าน คือเครดิต OpenAI หมดแทน ผลคือทุก terminal ใน VS Code
+  // ยิงไปที่บัญชีที่ตอบ 429 อย่างเงียบ ๆ ทับค่าปริยายในโค้ดที่ถูกต้องอยู่แล้ว
+  // จะเปลี่ยนโมเดลให้ใส่หน้าคำสั่งทีละครั้ง: LAWSCAN_MODEL=... lawscan scan ...
 
   "files.exclude": {
     "**/__pycache__": true,
