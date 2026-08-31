@@ -85,6 +85,14 @@ def run_all(document: Document, *, law_type: str | None = None) -> dict[str, str
     text = document.text()
     found: dict[str, str] = {"ชื่อไฟล์ ": document.number}
 
+    # The gazette addresses every document by its own number and nothing else,
+    # so the link is the number in a fixed frame — it held on all 250 rows of
+    # the operator's 2569 sheet with no exception. It was left to the model,
+    # which cannot know a URL from reading a PDF and so wrote nothing: the
+    # column stood empty on every row.
+    if document.number.isdigit():
+        found["ลิงค์PDF"] = f"https://ratchakitcha.soc.go.th/documents/{document.number}.pdf"
+
     stated = kind.read(text)
     if stated:
         found["ประเภทกฎหมาย"] = stated

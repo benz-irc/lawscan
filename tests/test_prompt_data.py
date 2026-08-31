@@ -1303,3 +1303,28 @@ class TestNoAlertOutlivesItsCode:
         row.put("ข้อความแจ้งเตือน (Smart Prompt)", "[CC5]: ถูกปัดตกทั้งหมด", "llm")
         _prune_alerts(row)
         assert row.value("ข้อความแจ้งเตือน (Smart Prompt)") == ""
+
+
+class TestTheGazetteLinkIsTheNumber:
+    """The column stood empty on all 250 rows because it was nobody's job.
+
+    A URL is not in the PDF, so no question could answer it and no rule
+    claimed it. The gazette addresses a document by its number alone, and the
+    frame held on every row of the operator's own 2569 sheet.
+    """
+
+    def _found(self, stem, text="ประกาศ"):
+        from pathlib import Path
+
+        from lawscan.ocr.read import Document, Page
+        from lawscan.rules import run_all
+
+        return run_all(Document(path=Path(f"{stem}.pdf"),
+                                pages=[Page(number=1, text=text, source="ocr")]))
+
+    def test_the_number_becomes_the_link(self):
+        assert self._found("122839")["ลิงค์PDF"] == (
+            "https://ratchakitcha.soc.go.th/documents/122839.pdf")
+
+    def test_a_name_that_is_not_a_number_gets_no_link(self):
+        assert "ลิงค์PDF" not in self._found("ตัวอย่าง")
