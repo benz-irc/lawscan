@@ -223,3 +223,48 @@ def test_the_english_word_gas_is_left_alone():
                     "Liquefied Natural Gas (LNG)",
                     "Calibration Gas Cylinder I.D."):
         assert repair_misread_subject(english) == english
+
+
+
+class TestTheWordsThe2569SheetStillCarried:
+    """Nine spellings survived the page repair and reached the cells.
+
+    They were not on the list, so nothing looked for them — ``เลือกตัง`` came
+    through the model, which quoted the page exactly as it read. Added to the
+    table that was already there rather than to a second one beside it, and
+    ``Row.put`` now runs the repair so a run already paid for is fixed too.
+    """
+
+    def test_the_damaged_compound_is_restored(self):
+        from lawscan.ocr.thai_text import repair_dropped_marks as fix
+
+        assert fix("การเลือกตังสมาชิกสภา") == "การเลือกตั้งสมาชิกสภา"
+        assert fix("แก้ไขเพิมเติม") == "แก้ไขเพิ่มเติม"
+        assert fix("ระเบยบ ก.ศป.") == "ระเบียบ ก.ศป."
+        assert fix("ประกาศ เรือง การแบ่ง") == "ประกาศ เรื่อง การแบ่ง"
+
+    def test_a_real_word_that_looks_damaged_is_left_alone(self):
+        from lawscan.ocr.thai_text import repair_dropped_marks as fix
+
+        assert fix("ป้ายเรืองแสง") == "ป้ายเรืองแสง"
+        assert fix("เรืองรองทองอร่าม") == "เรืองรองทองอร่าม"
+        assert fix("ขนมตังเม") == "ขนมตังเม"
+
+    def test_correct_text_passes_through_untouched(self):
+        from lawscan.ocr.thai_text import repair_dropped_marks as fix
+
+        said = "ระเบียบคณะกรรมการการเลือกตั้ง ว่าด้วยการใช้จ่ายเงิน พ.ศ. 2569"
+        assert fix(said) == said
+
+    def test_the_year_is_not_guessed(self):
+        """๕ and ๙ both scan as 5, so 25205 could be 2565 or 2569 — leave it."""
+        from lawscan.ocr.thai_text import repair_dropped_marks as fix
+
+        assert fix("พ.ศ. 25205") == "พ.ศ. 25205"
+
+    def test_a_cell_is_repaired_on_the_way_in(self):
+        from lawscan.merge import Row
+
+        row = Row(document="ทดสอบ")
+        row.put("กฎหมายแม่", "พระราชบัญญัติการเลือกตัง พ.ศ. 2560", "llm")
+        assert "เลือกตั้ง" in row.value("กฎหมายแม่")

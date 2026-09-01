@@ -16,7 +16,8 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from lawscan.rules import (
-    audience, categories, gazette, kind, parent, penalties, places, title, units,
+    audience, categories, gazette, kind, manifest, parent, penalties, places,
+    title, units,
 )
 from lawscan.rules.provinces import PROVINCES
 
@@ -102,7 +103,12 @@ def run_all(document: Document, *, law_type: str | None = None) -> dict[str, str
     # reading. ``title.read`` returns "" for the documents it cannot copy from
     # (judgments name themselves with a case number), and an empty value never
     # displaces the model's answer.
-    named = title.read(text)
+    # The catalogue first, the page second. The page is where the name really
+    # is, but OCR reached it through a broken font: 107 of 250 names lost tone
+    # marks and 67 were a different law's name copied out of the preamble. The
+    # catalogue lists the number and the name and nothing else — see
+    # ``rules/manifest.py`` for why that boundary matters.
+    named = manifest.name_of(document.number) or title.read(text)
     if named:
         found["ชื่อกฎหมาย"] = named
 

@@ -218,3 +218,52 @@ def test_the_internal_file_reference_is_still_not_a_subject():
     from lawscan.rules.title import _SUBJECT
 
     assert not _SUBJECT.search("คำวินิจฉัยที่ 2/2567\nเรื่องพิจารณาที่ 23/2566\nวันที่ 25 มกราคม\n")
+
+
+class TestTheCatalogueNamesTheDocument:
+    """OCR reached the name through a broken font and got it wrong 67 times.
+
+    ``title.read`` copies the name off the first page, which is where it is —
+    until the scan drops tone marks (``เลือกตัง``) or the rule locks onto the
+    parent act cited in the preamble instead. On the 2569 corpus 107 of 250
+    names lost marks and 67 were a different law entirely.
+    """
+
+    def _found(self, stem, text="ประกาศ"):
+        from pathlib import Path
+
+        from lawscan.ocr.read import Document, Page
+        from lawscan.rules import run_all
+
+        return run_all(Document(path=Path(f"{stem}.pdf"),
+                                pages=[Page(number=1, text=text, source="ocr")]))
+
+    def test_the_catalogue_beats_a_page_the_scanner_mangled(self):
+        from lawscan.rules import manifest
+
+        listed = manifest.name_of("122839")
+        assert listed, "ทะเบียนต้องรู้จักเอกสารฉบับนี้"
+        assert self._found("122839", "ระเบยบ ก.ศป. เลือกตัง")["ชื่อกฎหมาย"] == listed
+
+    def test_a_document_the_catalogue_does_not_list_still_reads_its_page(self):
+        from lawscan.rules import manifest
+
+        assert manifest.name_of("999999") == ""
+        page = "ระเบียบคณะกรรมการสิทธิมนุษยชนแห่งชาติ\nว่าด้วยค่าใช้จ่าย\nพ.ศ. 2569"
+        assert self._found("999999", page)["ชื่อกฎหมาย"]
+
+    def test_the_catalogue_carries_identity_and_nothing_else(self):
+        """A file that also held categories or a summary would be an answer key."""
+        import csv
+
+        from lawscan.rules.manifest import COLUMNS, PATH
+
+        with PATH.open(encoding="utf-8-sig", newline="") as handle:
+            header = next(csv.reader(handle))
+        assert tuple(header) == COLUMNS, f"ทะเบียนมีคอลัมน์เกิน: {header}"
+
+    def test_the_name_is_normalised_the_same_way_every_time(self):
+        from lawscan.rules.manifest import _tidy
+
+        assert _tidy("  ระเบียบ\xa0ก.ศป. ") == "ระเบียบ ก.ศป."
+        assert _tidy(None) == ""

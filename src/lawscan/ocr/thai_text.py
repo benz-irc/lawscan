@@ -370,12 +370,26 @@ _DROPPED_MARKS: dict[str, str] = {
     "เพือ": "เพื่อ",           # 18 against 29,510
     "พืนที": "พื้นที่",        # both halves broken at once
     "พินที": "พื้นที่",        # 6 against 7,953
+    # Found in the 2569 sheet, where they had survived all the way into cells:
+    # the page repair never saw them because these words were not on the list.
+    "เลือกตัง": "เลือกตั้ง",   # 32 — ตัง alone is a sweet, the compound is not
+    "จัดตัง": "จัดตั้ง",
+    "แต่งตัง": "แต่งตั้ง",
+    "ตังแต่": "ตั้งแต่",
+    "ตังอยู่": "ตั้งอยู่",
+    "เพิมเติม": "เพิ่มเติม",
+    "ส่วนเพิม": "ส่วนเพิ่ม",
+    "ระเบยบ": "ระเบียบ",
+    "ทีสุด": "ที่สุด",
+    "เรือง": "เรื่อง",     # guarded below: เรืองแสง and เรืองรอง are words
 }
 
 #: ``เมือ`` is the one that cannot be decided by the mark alone: ``เมือง`` is a
 #: word, 14,269 of them, and it opens with the same three letters. Its guard is
 #: the letter behind rather than the mark.
-_ALSO_NOT_BEHIND: dict[str, str] = {"เมือ": "ง"}
+#: ``เรือง`` is the second of them — ``เรืองแสง`` and ``เรืองรอง`` are words,
+#: so the guard is again the letter behind rather than the mark.
+_ALSO_NOT_BEHIND: dict[str, str] = {"เมือ": "ง", "เรือง": "แร"}
 
 _TONE_MARKS = "่้๊๋์"
 _DROPPED = re.compile("|".join(
@@ -581,3 +595,4 @@ def normalize_for_matching(text: str) -> str:
     text = re.sub(r"[\s๏๚๛]+", "", text)
     text = re.sub(r"[^\w฀-๿]", "", text)
     return text
+

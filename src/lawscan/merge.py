@@ -31,6 +31,7 @@ from typing import Any
 
 from lawscan import citation
 from lawscan.export.columns import NONE_IS_AN_ANSWER
+from lawscan.ocr import thai_text
 
 #: What ``rules`` writes into a column it read and found nothing in.
 NOTHING = "-"
@@ -77,6 +78,11 @@ class Row:
         # should not read one way in the parent column and another way in the
         # summary beside it.
         text = citation.tidy(text)
+        # The scanner drops tone marks, and a cell copied out of the scan keeps
+        # them missing however it got here — ``เลือกตัง`` reached the sheet
+        # through the model, which quoted the page faithfully. Repaired at the
+        # cell rather than at the page so a run already paid for is fixed too.
+        text = thai_text.repair_dropped_marks(text)
         if not text and existing and existing.value:
             return
         self.cells[column] = Cell(text, source)
