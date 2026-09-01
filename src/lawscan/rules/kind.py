@@ -146,3 +146,24 @@ def position(text: str) -> int:
     head, where = _fold(text[:HEAD])
     earliest = _earliest(head)
     return where[earliest[0]] if earliest else -1
+
+
+def from_name(name: str) -> str:
+    """The type a settled title states, or "" if it opens with none of them.
+
+    ``read`` looks for the earliest kind word on the page, which is the right
+    rule when the page is all there is. It is the wrong one when the page was
+    scanned badly: on 24 of 250 documents the earliest word it found belonged
+    to the act named in the authority clause, so a กฎกระทรวง was filed as a
+    พระราชบัญญัติ and a พระราชกฤษฎีกา as a ประกาศ.
+
+    A title that came from the catalogue does not have that problem — it opens
+    with the instrument's own word, and the operator's own sheet agrees with it
+    on 240 of 250. Longest first, so ``พระราชบัญญัติประกอบรัฐธรรมนูญ`` is not
+    read as ``พระราชบัญญัติ``.
+    """
+    opening = (name or "").lstrip()
+    for word in sorted(KINDS, key=len, reverse=True):
+        if opening.startswith(word):
+            return LONG_FORM.get(word, word)
+    return ""

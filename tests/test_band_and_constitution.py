@@ -86,3 +86,42 @@ class TestTheConstitutionIsNotAParent:
         assert parent.read(
             "อาศัยอำนาจตามความในมาตรา 175 ของรัฐธรรมนูญแห่งราชอาณาจักรไทย ดังต่อไปนี้"
         ) == []
+
+
+class TestTheCastOffHeadingIsWrittenOnce:
+    """174 of 250 cells carried the heading twice, the second saying nothing.
+
+    The prompt asks for a ``STEP 3`` report and the model writes the heading
+    whether or not it threw anything out, so the cell ended with the heading
+    this code adds and, under it, ``STEP 3: -``.
+    """
+
+    def test_an_empty_report_leaves_no_heading(self):
+        from lawscan.rules.categories import CAST_OFF, joined
+
+        got = joined("[K4] เหตุผล<br>STEP 3: -", "")
+        assert CAST_OFF not in got
+        assert "STEP 3" not in got
+        assert got == "[K4] เหตุผล"
+
+    def test_a_real_report_keeps_one_heading(self):
+        from lawscan.rules.categories import CAST_OFF, joined
+
+        got = joined(f"[K4] เหตุผล<br>{CAST_OFF}<br>ปัดตก [BW1] ไม่เกี่ยว", "")
+        assert got.count("STEP 3") == 1
+        assert "ปัดตก [BW1] ไม่เกี่ยว" in got
+
+    def test_the_models_own_heading_does_not_double_ours(self):
+        from lawscan.rules.categories import CAST_OFF, joined
+
+        got = joined(f"[K4] ก<br>{CAST_OFF}<br>STEP 3: -<br>ปัดตก [BW1] ข", "")
+        assert got.count("STEP 3") == 1
+        assert "ปัดตก [BW1] ข" in got
+
+    def test_two_questions_still_share_one_heading(self):
+        from lawscan.rules.categories import CAST_OFF, joined
+
+        got = joined(f"[K4] ก<br>{CAST_OFF}<br>ปัดตก [A1] x",
+                     f"[BW1] ข<br>{CAST_OFF}<br>ปัดตก [B2] y")
+        assert got.count("STEP 3") == 1
+        assert got.index("[BW1] ข") < got.index("STEP 3")

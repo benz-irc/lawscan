@@ -158,13 +158,37 @@ def _base_and_suffix(document: str) -> tuple[int, int] | None:
     return (place, int(suffix or 0)) if 0 < place < _CORPUS_CEILING else None
 
 
-def place_in_corpus(document: str, fallback: int) -> str:
-    """Where this document sits in the operator's own numbering."""
+#: The operator's own corpus is named 100001 upwards and runs to 103424, so
+#: the number carries the place and a partial rescan of it must keep that
+#: number rather than count from one. A corpus named otherwise — the 2569 set
+#: is named with real Gazette numbers, 91099 to 125393 — carries no place in
+#: its names, and the same arithmetic wrote 830, 22839 and a negative where the
+#: operator's sheet numbers the rows 1 to 250. Which corpus this is has to be
+#: decided over the whole run, not one document at a time: 100830 falls inside
+#: the band and still is not the 830th of anything.
+_LAST_PLACE = 3_424
+
+
+def numbered_by_name(documents: list[str]) -> bool:
+    """Whether these names carry their own place, as the operator's do."""
+    places = [_base_and_suffix(name) for name in documents]
+    return bool(places) and all(
+        found is not None and 0 < found[0] <= _LAST_PLACE for found in places
+    )
+
+
+def place_in_corpus(document: str, position: int, by_name: bool = True) -> str:
+    """The row's number: from the name where the names carry one, else the place.
+
+    The annexe suffix always comes from the name — 1000012.1 is filed behind
+    100012 and the sheet numbers it ``12.1``.
+    """
     found = _base_and_suffix(document)
     if found is None:
-        return str(fallback)
+        return str(position)
     place, annexe = found
-    return f"{place}.{annexe}" if annexe else str(place)
+    head = place if by_name else position
+    return f"{head}.{annexe}" if annexe else str(head)
 
 
 def in_corpus_order(document: str) -> tuple[int, int, str]:
@@ -175,7 +199,7 @@ def in_corpus_order(document: str) -> tuple[int, int, str]:
     return (*found, document or "")
 
 
-def to_dict(row: Row, order: int) -> dict[str, str]:
+def to_dict(row: Row, order: int, by_name: bool = True) -> dict[str, str]:
     """One row as the export writes it."""
     out: dict[str, str] = {}
     for column in COLUMNS:
@@ -185,7 +209,7 @@ def to_dict(row: Row, order: int) -> dict[str, str]:
         if not value and column in NONE_IS_AN_ANSWER:
             value = NONE
         out[column] = value
-    out["ลำดับ"] = place_in_corpus(row.document, order)
+    out["ลำดับ"] = place_in_corpus(row.document, order, by_name)
     return out
 
 
@@ -200,5 +224,16 @@ def write_csv(rows: list[Row], path: Path) -> None:
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(COLUMNS), extrasaction="ignore")
         writer.writeheader()
-        for position, row in enumerate(ordered, start=1):
-            writer.writerow(to_dict(row, position))
+        # An annexe does not take a number of its own: the operator files
+        # 1000012.1 behind 100012 and writes 12.1, so the counter stands still
+        # while the annexe is written and moves on at the next document.
+        by_name = numbered_by_name([row.document for row in ordered])
+        # An annexe takes no number of its own: the operator files 1000012.1
+        # behind 100012 and writes 12.1, so the counter stands still while the
+        # annexe is written and moves on at the next document.
+        place = 0
+        for row in ordered:
+            found = _base_and_suffix(row.document)
+            if not (found and found[1]):
+                place += 1
+            writer.writerow(to_dict(row, max(place, 1), by_name))

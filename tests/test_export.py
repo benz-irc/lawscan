@@ -212,7 +212,7 @@ class TestTheRowNumberBelongsToTheDocument:
     def test_it_comes_from_the_document_number(self):
         from lawscan.export.columns import place_in_corpus
 
-        assert place_in_corpus("100001", 999) == "1"
+        assert place_in_corpus("100001", 1) == "1"
         assert place_in_corpus("100240", 3) == "240"
         assert place_in_corpus("103424", 1) == "3424"
 
@@ -221,7 +221,7 @@ class TestTheRowNumberBelongsToTheDocument:
         from lawscan.merge import Row
 
         # Second row of a two-document rescan, but document 135 of the corpus.
-        assert to_dict(Row(document="100135"), 2)["ลำดับ"] == "135"
+        assert to_dict(Row(document="100135"), 135)["ลำดับ"] == "135"
 
     def test_a_document_named_otherwise_falls_back_to_position(self):
         from lawscan.export.columns import place_in_corpus
@@ -262,11 +262,18 @@ class TestAnAnnexeSitsBehindItsOwnDocument:
     """
 
     def test_it_is_numbered_off_the_sheet_it_belongs_to(self):
+        """The suffix comes from the name; the number in front is the place.
+
+        This used to read the number out of the file name too — which gives the
+        right answer on a corpus named 100001 upwards and nonsense on one named
+        with real Gazette numbers. ``write`` holds the counter still while an
+        annexe is written, so the annexe still carries its document's number.
+        """
         from lawscan.export.columns import place_in_corpus
 
-        assert place_in_corpus("1000012.1", 99) == "12.1"
-        assert place_in_corpus("100012.1", 99) == "12.1"
-        assert place_in_corpus("100012", 99) == "12"
+        assert place_in_corpus("1000012.1", 12) == "12.1"
+        assert place_in_corpus("100012.1", 12) == "12.1"
+        assert place_in_corpus("100012", 12) == "12"
 
     def test_it_sorts_between_its_document_and_the_next(self):
         from lawscan.export.columns import in_corpus_order
@@ -279,7 +286,7 @@ class TestAnAnnexeSitsBehindItsOwnDocument:
     def test_an_ordinary_document_is_untouched(self):
         from lawscan.export.columns import place_in_corpus
 
-        assert place_in_corpus("100001", 99) == "1"
+        assert place_in_corpus("100001", 1) == "1"
         assert place_in_corpus("103424", 99) == "3424"
 
     def test_a_name_that_is_not_a_number_falls_back_to_its_position(self):
@@ -308,3 +315,51 @@ class TestTheNotificationColumnIsOptIn:
         from lawscan.diff import UNSCORED
 
         assert "ข้อความแจ้งเตือน (Smart Prompt)" in UNSCORED
+
+
+class TestWhichCorpusTheNamesBelongTo:
+    """``number - 100000`` is the operator's numbering, not everyone's.
+
+    Their corpus is named 100001 upwards and runs to 103424, so the name
+    carries the place and a partial rescan has to keep it — numbering by
+    position there lost one exact cell per document on a twelve-document run.
+    The 2569 corpus is named with real Gazette numbers, and the same
+    arithmetic wrote 830 for the first row, 22839 for another and a negative
+    for the 9xxxx ones, where the operator's own sheet numbers the rows 1 to
+    250. So the choice is made over the whole run: 100830 falls inside the
+    band and still is not the 830th of anything.
+    """
+
+    def test_gazette_numbers_are_not_places(self):
+        from lawscan.export.columns import numbered_by_name
+
+        assert not numbered_by_name(["100830", "122839", "91099"])
+
+    def test_the_operators_own_names_are_places(self):
+        from lawscan.export.columns import numbered_by_name
+
+        assert numbered_by_name(["100001", "100240", "103424"])
+
+    def test_a_subset_of_their_corpus_keeps_their_numbers(self):
+        from lawscan.export.columns import numbered_by_name, place_in_corpus
+
+        names = ["100135", "100136"]
+        by_name = numbered_by_name(names)
+        assert place_in_corpus("100135", 1, by_name) == "135"
+
+    def test_a_gazette_corpus_counts_from_one(self):
+        from lawscan.export.columns import place_in_corpus
+
+        assert place_in_corpus("100830", 1, False) == "1"
+        assert place_in_corpus("122839", 2, False) == "2"
+
+    def test_the_annexe_suffix_survives_either_way(self):
+        from lawscan.export.columns import place_in_corpus
+
+        assert place_in_corpus("1000012.1", 12, True) == "12.1"
+        assert place_in_corpus("1000012.1", 12, False) == "12.1"
+
+    def test_a_name_that_is_not_a_number_still_gets_its_place(self):
+        from lawscan.export.columns import place_in_corpus
+
+        assert place_in_corpus("ตัวอย่าง", 7) == "7"

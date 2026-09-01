@@ -202,6 +202,43 @@ def _effective_long_after_publication(document: Document, row: Row) -> Finding |
     )
 
 
+def _effective_before_publication(document: Document, row: Row) -> Finding | None:
+    """A commencement earlier than publication, inside the same year or one back.
+
+    The check above compares years and lets a gap of -1 through, because an
+    instrument signed in one year and published early the next is ordinary. It
+    let two documents past that are not: one commencing three months before it
+    was published, one a year. Both may be real — a tax measure is allowed to
+    reach backwards — and both may be a misread date, so this reports rather
+    than corrects. Comparing the whole date is what the year check could not do.
+    """
+    from lawscan.rules import THAI_MONTHS
+
+    effective = row.value("วันทีมีผลใช้บังคับ")
+    if not effective or effective == "-":
+        return None
+    said = re.search(r"(\d{1,2})\s+(\S+)\s+(\d{4})", effective)
+    day, month, year = (row.value("วันที่ประกาศ"), row.value("เดือนที่ประกาศ"),
+                        row.value("ปีที่ประกาศ"))
+    if not (said and day.isdigit() and year.isdigit() and month in THAI_MONTHS):
+        return None
+    if said.group(2) not in THAI_MONTHS:
+        return None
+    printed = (int(year), THAI_MONTHS.index(month) + 1, int(day))
+    starts = (int(said.group(3)), THAI_MONTHS.index(said.group(2)) + 1,
+              int(said.group(1)))
+    if starts >= printed:
+        return None
+    # The year check already says its piece where the gap is years wide.
+    if printed[0] - starts[0] > 2:
+        return None
+    return Finding(
+        "commencement-before-publication", 0.2,
+        f"วันบังคับใช้ {effective} มาก่อนวันประกาศ {day} {month} {year}",
+        ("วันทีมีผลใช้บังคับ",),
+    )
+
+
 def _empty_required(document: Document, row: Row) -> Finding | None:
     """The columns without which the row identifies nothing."""
     missing = [c for c in ("ชื่อกฎหมาย", "ประเภทกฎหมาย") if not row.value(c)]
@@ -269,6 +306,7 @@ RULES = (
     _empty_required,
     _audience_is_a_person,
     _effective_long_after_publication,
+    _effective_before_publication,
     _no_business_codes,
     _truncated_and_incomplete,
 )

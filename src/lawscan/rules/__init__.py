@@ -94,10 +94,6 @@ def run_all(document: Document, *, law_type: str | None = None) -> dict[str, str
     if document.number.isdigit():
         found["ลิงค์PDF"] = f"https://ratchakitcha.soc.go.th/documents/{document.number}.pdf"
 
-    stated = kind.read(text)
-    if stated:
-        found["ประเภทกฎหมาย"] = stated
-
     # The instrument prints its own name before it prints anything else, so
     # this is a copy rather than a reading — and it was being paid for as a
     # reading. ``title.read`` returns "" for the documents it cannot copy from
@@ -111,6 +107,14 @@ def run_all(document: Document, *, law_type: str | None = None) -> dict[str, str
     named = manifest.name_of(document.number) or title.read(text)
     if named:
         found["ชื่อกฎหมาย"] = named
+
+    # The title states the type, and a settled title states it correctly. The
+    # page-reading rule stays as the fallback for a document the catalogue does
+    # not list — it is the only way in that case, and it is right 200 times in
+    # 250 even on a bad scan.
+    stated = kind.from_name(named) or kind.read(text)
+    if stated:
+        found["ประเภทกฎหมาย"] = stated
 
     # A published law is in force. Nothing in a document can say it has since
     # been repealed — that is written in the law that repealed it, which is a

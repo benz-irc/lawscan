@@ -520,12 +520,30 @@ def _by_code() -> dict[str, str]:
 
 
 
+#: A ``STEP 3`` line that reports nothing. The prompt asks for the heading and
+#: the model writes one whether or not it threw anything out, so on 164 of 250
+#: documents the cell ended ``STEP 3: รายงานผลด่านคัดกรอง<br>STEP 3: -`` — the
+#: heading this file adds, and under it a heading that says nothing. Both are
+#: dropped here, and where nothing is left the heading is not written at all.
+_EMPTY_STEP_3 = re.compile(r"^\s*STEP\s*3\s*[:：]?\s*[-–—]?\s*$")
+
+
+def _reported(text: str) -> str:
+    """A cast-off block with its empty headings taken out."""
+    lines = [line for line in text.replace("<br>", "\n").split("\n")
+             if line.strip() and not _EMPTY_STEP_3.match(line)
+             and line.strip() != CAST_OFF]
+    return "<br>".join(lines)
+
+
 def _split_tail(text: str) -> tuple[str, str]:
     """``text`` as (live part, cast-off part)."""
     at = text.find(CAST_OFF)
     if at < 0:
-        return text.strip(), ""
-    return text[:at].strip().rstrip("<br>"), text[at + len(CAST_OFF):].strip()
+        # The model writes its own heading even when it rejected nothing, and
+        # that line is not working — it is an empty report.
+        return _reported(text).strip(), ""
+    return text[:at].strip().rstrip("<br>"), _reported(text[at + len(CAST_OFF):]).strip()
 
 
 def joined(existing: str, addition: str) -> str:

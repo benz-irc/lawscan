@@ -181,3 +181,43 @@ def test_a_page_with_no_layer_at_all_still_counts_against_confidence():
     finding = _mostly_recognised(scanned, Row(document="ทดสอบ"))
     assert finding is not None
     assert finding.penalty == 0.15
+
+
+class TestACommencementThatPrecedesPublication:
+    """The year check let two documents past that start before they exist.
+
+    It compares years and allows a gap of -1, because signing in one year and
+    publishing early the next is ordinary. 124840 commences three months before
+    its own publication and 105800 a year — inside the tolerance, so neither
+    was reported. Both may be real; a tax measure may reach backwards. So this
+    reports and does not correct.
+    """
+
+    def _row(self, day, month, year, effective):
+        from lawscan.merge import Row
+
+        row = Row(document="ทดสอบ")
+        row.put("วันที่ประกาศ", day, "rule")
+        row.put("เดือนที่ประกาศ", month, "rule")
+        row.put("ปีที่ประกาศ", year, "rule")
+        row.put("วันทีมีผลใช้บังคับ", effective, "rule")
+        return row
+
+    def _find(self, row):
+        from lawscan.confidence import _effective_before_publication
+
+        return _effective_before_publication(None, row)
+
+    def test_a_date_inside_the_same_year_is_reported(self):
+        got = self._find(self._row("7", "สิงหาคม", "2569", "9 พฤษภาคม 2569"))
+        assert got is not None and "มาก่อนวันประกาศ" in got.why
+
+    def test_a_year_back_is_reported(self):
+        assert self._find(self._row("19", "กุมภาพันธ์", "2569", "20 มีนาคม 2568")) is not None
+
+    def test_the_ordinary_case_is_silent(self):
+        assert self._find(self._row("7", "สิงหาคม", "2569", "8 สิงหาคม 2569")) is None
+        assert self._find(self._row("7", "สิงหาคม", "2569", "7 สิงหาคม 2569")) is None
+
+    def test_a_gap_of_years_is_left_to_the_check_that_owns_it(self):
+        assert self._find(self._row("5", "กุมภาพันธ์", "2569", "20 มกราคม 2525")) is None
