@@ -53,3 +53,8 @@ def _tidy(name: str | None) -> str:
 def name_of(number: str) -> str:
     """The catalogue's name for this document, or "" if it lists no such one."""
     return _by_number().get((number or "").strip(), "")
+
+
+def names() -> list[str]:
+    """Every name the catalogue lists, for looking one up by its text."""
+    return list(_by_number().values())

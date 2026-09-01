@@ -32,6 +32,7 @@ from typing import Any
 from lawscan import citation
 from lawscan.export.columns import NONE_IS_AN_ANSWER
 from lawscan.ocr import thai_text
+from lawscan.rules import lawnames
 
 #: What ``rules`` writes into a column it read and found nothing in.
 NOTHING = "-"
@@ -83,6 +84,12 @@ class Row:
         # through the model, which quoted the page faithfully. Repaired at the
         # cell rather than at the page so a run already paid for is fixed too.
         text = thai_text.repair_dropped_marks(text)
+        # A column that names another law gets one more pass. The name came off
+        # a damaged page, and the catalogue knows what it should read — but
+        # only for those five columns: snapping a summary sentence to the
+        # nearest law title would be a different kind of wrong.
+        if column in lawnames.COLUMNS:
+            text = lawnames.settle_all(text)
         if not text and existing and existing.value:
             return
         self.cells[column] = Cell(text, source)

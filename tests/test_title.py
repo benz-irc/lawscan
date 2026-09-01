@@ -267,3 +267,97 @@ class TestTheCatalogueNamesTheDocument:
 
         assert _tidy("  ระเบียบ\xa0ก.ศป. ") == "ระเบียบ ก.ศป."
         assert _tidy(None) == ""
+
+
+class TestTheNameOfALawTheDocumentCites:
+    """Five columns name other documents, and no number looks them up.
+
+    ``ชื่อกฎหมาย`` is settled by number. The parent act, the laws referred to
+    and the laws repealed or amended are read off a damaged page: stray Latin
+    runs inside the name, and a year the glyph table cannot render — ๖ came
+    back as 2, 0 and 20 in different documents, ๕ and ๙ both as 5.
+    """
+
+    def test_stray_latin_between_thai_words_is_swept(self):
+        from lawscan.rules.lawnames import tidy
+
+        assert tidy("พระราชบัญญัติจัดตั้งศาลปกครอง owe 1 aaa a a และวิธีพิจารณา") == (
+            "พระราชบัญญัติจัดตั้งศาลปกครอง และวิธีพิจารณา")
+
+    def test_a_section_number_is_not_junk(self):
+        """An earlier pattern deleted the 5 out of มาตรา 5 วรรคหนึ่ง."""
+        from lawscan.rules.lawnames import tidy
+
+        said = "พ.ร.บ. ก. พ.ศ. 2560 มาตรา 5 วรรคหนึ่ง (3)"
+        assert tidy(said) == said
+
+    def test_a_long_latin_word_is_left_alone(self):
+        from lawscan.rules.lawnames import tidy
+
+        said = "ประกาศ เรื่อง แนวทาง COVID 19 ของกรมควบคุมโรค"
+        assert tidy(said) == said
+
+    def test_the_year_comes_from_the_catalogue_when_it_is_certain(self):
+        from lawscan.rules.lawnames import settle
+
+        got = settle("ระเบียบคณะกรรมการการเลือกตั้งว่าด้วยกองทุนเพื่อการพัฒนาพรรคการเมือง พ.ศ. 25200")
+        assert got.endswith("พ.ศ. 2560"), got
+
+    def test_the_citing_document_keeps_its_own_annotation(self):
+        from lawscan.rules.lawnames import settle
+
+        got = settle("ระเบียบคณะกรรมการการเลือกตั้งว่าด้วยกองทุนเพื่อการพัฒนาพรรคการเมือง พ.ศ. 25200 (มาตรา 22)")
+        assert got.endswith("(มาตรา 22)"), got
+
+    def test_a_name_listed_under_several_years_is_left_as_it_came(self):
+        """Picking between two real answers is a guess wearing a fact's clothes."""
+        from lawscan.rules.lawnames import _unambiguous, _key
+
+        repeated = "พระราชกฤษฎีกาปิดประชุมสมัยวิสามัญแห่งรัฐสภา"
+        assert _key(repeated) not in _unambiguous()
+
+    def test_a_law_the_catalogue_does_not_list_is_only_tidied(self):
+        from lawscan.rules.lawnames import settle
+
+        said = "พระราชบัญญัติวิธีปฏิบัติราชการทางปกครอง พ.ศ. 2539"
+        assert settle(said) == said
+
+    def test_the_dash_survives(self):
+        from lawscan.rules.lawnames import settle_all
+
+        assert settle_all("-") == "-"
+
+    def test_only_the_name_columns_are_touched(self):
+        from lawscan.rules.lawnames import COLUMNS
+
+        assert "ชื่อกฎหมาย" not in COLUMNS
+        assert "คำอธิบายและสรุปสาระสำคัญ" not in COLUMNS
+        assert "กฎหมายแม่" in COLUMNS
+
+    def test_the_section_list_after_the_year_survives(self):
+        """It did not once: twenty-one penalty cells lost their มาตรา list."""
+        from lawscan.rules.lawnames import settle
+
+        got = settle("พระราชบัญญัติประกอบรัฐธรรมนูญว่าด้วยคณะกรรมการสิทธิมนุษยชนแห่งชาติ"
+                     " พ.ศ. 2500 มาตรา 5 และมาตรา 33")
+        assert got.endswith("พ.ศ. 2560 มาตรา 5 และมาตรา 33"), got
+
+    def test_the_scanners_spelling_of_phor_sor_is_restored(self):
+        from lawscan.rules.lawnames import tidy
+
+        assert tidy("พระราชบัญญัติระเบียบบริหารราชการแผ่นดิน WA, 2535 มาตรา 5") == (
+            "พระราชบัญญัติระเบียบบริหารราชการแผ่นดิน พ.ศ. 2535 มาตรา 5")
+        assert tidy("พระราชบัญญัติเงินเดือน we. 2535") == "พระราชบัญญัติเงินเดือน พ.ศ. 2535"
+
+    def test_a_comma_inside_the_scanners_phor_sor_does_not_split_the_name(self):
+        """WA, 2535 was cut in half, and neither half was a law."""
+        from lawscan.rules.lawnames import settle_all
+
+        got = settle_all("พระราชบัญญัติระเบียบบริหารราชการแผ่นดิน WA, 2535 มาตรา 5")
+        assert got == "พระราชบัญญัติระเบียบบริหารราชการแผ่นดิน พ.ศ. 2535 มาตรา 5"
+
+    def test_two_real_names_still_split_on_the_comma(self):
+        from lawscan.rules.lawnames import settle_all
+
+        got = settle_all("พระราชบัญญัติ ก. พ.ศ. 2560, พระราชบัญญัติ ข. พ.ศ. 2561")
+        assert got.count(",") == 1
