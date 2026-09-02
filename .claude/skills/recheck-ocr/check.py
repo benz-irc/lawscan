@@ -25,10 +25,16 @@ FAULTS: dict[str, re.Pattern[str]] = {
     "ตัวอักษรแทนเลข (หน้า ด)": re.compile(r"(?:เล่ม|ตอนที่|หน้า|ข้อ|มาตรา)\s+[ดo](?![ก-ฮะ-๎])"),
     "ปีหายหลักแรกหลังทับ (/๕๖๘)": re.compile(r"(?<=/)[๕๖][๐-๙]{2}(?![๐-๙])|(?<=/)[56]\d{2}(?!\d)"),
     "ตัวเศษหน้าทับหาย (ที่ /๒๕๖๘)": re.compile(r"(?<![๐-๙\d])/[๐-๙\d]"),
-    "จุดทศนิยมหาย (๑๐,๐๘๘๘๑)": re.compile(r"[๐-๙\d],[๐-๙\d]{4,}"),
+    # A thousands separator, so a unit has to follow — otherwise this fires on
+    # every list of house numbers, and an electoral-boundary notice is nothing
+    # but lists of house numbers.
+    "จุดทศนิยมหาย (๑๐,๐๘๘๘๑)": re.compile(
+        r"[๐-๙\d],[๐-๙\d]{4,}\s*(?:บาท|กรัม|กิโลกรัม|ตารางเมตร|ไร่|ลิตร|ตัน)"),
     "เลขนำหน้าข้อเป็นตัวอักษร (ด.)": re.compile(r"(?:^|\n)\s*[ดo]\s*\.\s"),
     "วรรณยุกต์หาย (เลือกตัง)": re.compile(r"เลือกตัง|จัดตัง|เรือง(?!แสง|รอง)|เพิมเติม|ระเบยบ"),
-    "ปีรูปผิด (25205)": re.compile(r"(?<!\d)25\d{3,4}(?!\d)"),
+    # Anchored on พ.ศ. Without it this fires on map grid references — PQ 251998
+    # is a coordinate, and a boundary notice is full of them.
+    "ปีรูปผิด (พ.ศ. 25205)": re.compile(r"(?:พ\.?ศ\.?)\s*(?<!\d)25\d{3,4}(?!\d)"),
 }
 
 
@@ -47,10 +53,16 @@ def corpus(text_dir: str, pdf_dir: str) -> int:
     seen = {record.stem: len(pages) for record, pages in _pages(text)}
     missing = sorted(set(want) - set(seen))
     short = sorted(n for n in set(want) & set(seen) if seen[n] != want[n])
+    # A document can be mostly numbers and still be read perfectly: an
+    # electoral-boundary notice is pages of house numbers, and judging it by
+    # how much Thai it holds calls it broken when it is the longest reading of
+    # the corpus. Length is the honest test; the ratio only decides among
+    # documents that are short as well.
     thin = []
     for record in sorted(text.glob("*.txt")):
         body = record.read_text(encoding="utf-8")
-        if len(body) < 200 or len(THAI_LETTER.findall(body)) / max(1, len(body)) < 0.35:
+        letters = len(THAI_LETTER.findall(body))
+        if len(body) < 200 or (len(body) < 2_000 and letters / max(1, len(body)) < 0.35):
             thin.append(record.stem)
     print(f"PDF {len(want)} ฉบับ · อ่านแล้ว {len(seen)} ฉบับ")
     print(f"หน้า ต้องการ {sum(want.values()):,} · ได้ {sum(seen.values()):,}")
