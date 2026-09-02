@@ -535,7 +535,49 @@ def _by_vision(image: object) -> str | None:
         image.save(handle.name)  # type: ignore[attr-defined]
         found = ocrmac.OCR(handle.name, language_preference=["th-TH"],
                            recognition_level="accurate").recognize()
-    return "\n".join(text for text, _, _ in found)
+
+    lines: list[str] = []
+    for text, _, box in found:
+        if _LOST_NUMERATOR.search(text):
+            again = _reread(image, box)
+            # Only where reading it again actually supplied the digit. A second
+            # look that returns the same gap, or wanders off into the line
+            # beside it, is not an improvement.
+            if again and not _LOST_NUMERATOR.search(again) and "/" in again:
+                text = again
+        lines.append(text)
+    return "\n".join(lines)
+
+
+#: A slash with no digit in front of it. ``เรื่องพิจารณาที่ ๘/๒๕๖๘`` comes
+#: back ``เรื่องพิจารณาที่ /๒๕๖๘`` — the recogniser reads the whole line at
+#: once and loses the numerator against the separator. 18 of the 62 numbers
+#: missed over 128 pages of known text are this, and the number lost is a case
+#: or meeting number, so unlike the year behind the slash there is nothing to
+#: infer it from. Reading that fragment again on its own recovers it.
+_LOST_NUMERATOR = re.compile(r"(?<![๐-๙\d])/[๐-๙\d]")
+
+
+def _reread(image: object, box: list[float]) -> str:
+    """One fragment of a page, cropped out and read again at twice the size."""
+    from PIL import Image
+
+    from ocrmac import ocrmac
+
+    width, height = image.size  # type: ignore[attr-defined]
+    x, y, w, h = box
+    left, right = int(x * width) - 20, int((x + w) * width) + 20
+    top, bottom = int((1 - y - h) * height) - 10, int((1 - y) * height) + 10
+    crop = image.crop((max(0, left), max(0, top),  # type: ignore[attr-defined]
+                       min(width, right), min(height, bottom)))
+    crop = crop.resize((crop.width * 2, crop.height * 2), Image.LANCZOS)
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".png") as handle:
+        crop.save(handle.name)
+        found = ocrmac.OCR(handle.name, language_preference=["th-TH"],
+                           recognition_level="accurate").recognize()
+    return " ".join(text for text, _, _ in found)
 
 
 def _recognise(page: object, *, clip: object = None) -> str:
