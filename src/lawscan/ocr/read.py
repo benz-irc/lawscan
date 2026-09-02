@@ -601,6 +601,43 @@ def _reread(image: object, box: list[float]) -> str:
     return " ".join(text for text, _, _ in found)
 
 
+#: A page carrying a number written as a fraction — a case number, a letter
+#: number, a meeting number. These are where the recogniser loses digits: 25 of
+#: the 54 numbers still missed over 128 pages of known text sit on pages like
+#: this, and 13% of the corpus's pages carry one.
+_FRACTION = re.compile(r"[๐-๙\d]{1,4}\s*/\s*[๐-๙\d]{1,4}")
+
+#: Read again at this, when the first pass says the page is one of the hard
+#: ones. Measured over eight pages known to lose digits: 400 dpi finds 88.5% of
+#: the numbers printed, 600 finds 91.0%, and the two together find 92.9%.
+#: 900 was measured beside them and added nothing. Combining is safe in a way
+#: a repair rule is not — both readings are things the recogniser saw, so the
+#: union can gain a number but cannot invent one.
+_SECOND_DPI = 600
+
+
+def _numbers(text: str) -> set[str]:
+    """Every number in ``text``, spacing inside one number closed up."""
+    return set(re.findall(r"\d+", re.sub(r"(?<=\d)\s+(?=\d)", "", thai_to_arabic_digits(text))))
+
+
+def _combined(first: str, second: str) -> str:
+    """The fuller of two readings, plus the lines the other one alone has.
+
+    Whichever read found more numbers is the page; lines from the other that
+    carry a number missing from it are added underneath. Appending rather than
+    weaving them in: the two readings order the page differently, and a line
+    dropped into the wrong place reads as part of a sentence it does not belong
+    to. At the foot it is plainly a second reading.
+    """
+    base, other = ((second, first) if len(_numbers(second)) > len(_numbers(first))
+                   else (first, second))
+    held = _numbers(base)
+    extra = [line for line in other.splitlines()
+             if line.strip() and _numbers(line) - held]
+    return base if not extra else base + "\n" + "\n".join(extra)
+
+
 def _recognise(page: object, *, clip: object = None) -> str:
     """Recognise one page, or return nothing if the tools are not installed.
 
@@ -625,7 +662,18 @@ def _recognise(page: object, *, clip: object = None) -> str:
 
     seen = _by_vision(image)
     if seen is not None:
-        return repair_clipped_years(repair_numeral_lookalikes(seen))
+        seen = repair_clipped_years(repair_numeral_lookalikes(seen))
+        if clip is None and _FRACTION.search(seen):
+            try:
+                bigger = page.get_pixmap(dpi=_SECOND_DPI)  # type: ignore[attr-defined]
+                again = _by_vision(Image.open(io.BytesIO(bigger.tobytes("png"))))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("อ่านซ้ำหน้านี้ไม่สำเร็จ: %s", type(exc).__name__)
+                again = None
+            if again:
+                seen = _combined(seen, repair_clipped_years(
+                    repair_numeral_lookalikes(again)))
+        return seen
 
     try:
         import pytesseract

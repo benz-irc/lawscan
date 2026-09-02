@@ -282,13 +282,20 @@ class TestTheAnswerKeyCannotReachTheModel:
     lives in ``reference/``, which nothing in the sending path reads.
     """
 
-    def test_the_reference_is_not_in_the_prompt_data_folder(self):
+    def test_the_answer_key_is_nowhere_a_prompt_can_reach(self):
+        """It is out of the tree now, which is stronger than out of ``data/``.
+
+        The guard used to assert it sat in ``reference/`` instead — a folder
+        nothing in the sending path reads. It is not in the repository at all
+        any more: whoever runs this keeps it outside, and ``lawscan diff``
+        takes ``--expected`` pointing wherever they put it. A file that is not
+        here cannot be loaded by anything, which is the whole point.
+        """
         from pathlib import Path
 
-        assert not Path("data/expected.csv").exists(), (
-            "ไฟล์เฉลยกลับเข้าไปอยู่ใน data/ ซึ่งเป็นโฟลเดอร์ที่ prompt ดึงไปเติม"
-        )
-        assert Path("reference/expected.csv").exists()
+        for folder in ("data", "prompts", "reference"):
+            stray = sorted(Path(folder).glob("expected*.csv")) if Path(folder).exists() else []
+            assert not stray, f"ไฟล์เฉลยกลับเข้ามาอยู่ใน {folder}/: {stray}"
 
     def test_nothing_a_prompt_can_load_holds_reference_answers(self):
         import csv
