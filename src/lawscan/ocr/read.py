@@ -20,7 +20,8 @@ from pathlib import Path
 
 from lawscan import progress
 from lawscan.ocr.thai_text import (
-    normalize_text, normalize_unicode, repair_swapped_sara_aa, restore_pua_marks,
+    normalize_text, normalize_unicode, repair_clipped_years,
+    repair_numeral_lookalikes, repair_swapped_sara_aa, restore_pua_marks,
     restore_sara_am, thai_char_ratio, thai_to_arabic_digits,
 )
 
@@ -504,29 +505,73 @@ def _recognise_pictures(page: object) -> str:
     return "\n".join(found)
 
 
+#: 400 dpi. Thai tone marks sit above the line and are the first thing lost at
+#: a lower resolution; 600 was measured against 400 on three documents and
+#: recovered nothing more for five times the time.
+DPI = 400
+
+
+def _by_vision(image: object) -> str | None:
+    """macOS's own recogniser, or None where it is not available.
+
+    Tesseract cannot read Thai numerals in this corpus. Measured against the
+    operator's register over 206 documents it returned ๔ as ๕ two hundred and
+    seven times, ๘ as ๕, ๗ as ๓ — and the wrong digits are well-formed, so
+    ``พ.ศ. ๒๕๔๒`` arrives as ``พ.ศ. 2552`` and nothing downstream can tell.
+    Every page it read had its volume and issue wrong: 153 of 153. Every page
+    taken from the text layer instead had them right: 31 of 31.
+
+    The recogniser built into macOS reads the same pages correctly. On the
+    three documents measured against the digits held in the PDF's own text
+    layer it recovered every year, where Tesseract recovered none.
+    """
+    try:
+        from ocrmac import ocrmac
+    except ImportError:
+        return None
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".png") as handle:
+        image.save(handle.name)  # type: ignore[attr-defined]
+        found = ocrmac.OCR(handle.name, language_preference=["th-TH"],
+                           recognition_level="accurate").recognize()
+    return "\n".join(text for text, _, _ in found)
+
+
 def _recognise(page: object, *, clip: object = None) -> str:
     """Recognise one page, or return nothing if the tools are not installed.
 
-    A missing Tesseract is a fact about the machine, not an error in the
+    A missing recogniser is a fact about the machine, not an error in the
     document — the page comes back empty, the rules find nothing on it, and
     that is visible rather than fatal.
     """
     try:
         import io
 
-        import pytesseract
         from PIL import Image
     except ImportError:
-        _engine_missing("pytesseract ยังไม่ได้ติดตั้ง")
+        _engine_missing("Pillow ยังไม่ได้ติดตั้ง")
         return ""
 
     try:
-        # 300 dpi. Thai tone marks sit above the line and are the first thing
-        # lost at a lower resolution.
-        pixmap = page.get_pixmap(dpi=300, clip=clip)  # type: ignore[attr-defined]
+        pixmap = page.get_pixmap(dpi=DPI, clip=clip)  # type: ignore[attr-defined]
         image = Image.open(io.BytesIO(pixmap.tobytes("png")))
-        return pytesseract.image_to_string(image, lang="tha+eng")
     except Exception as exc:  # noqa: BLE001 — one bad page is not a bad document
+        log.warning("เรนเดอร์หน้านี้ไม่สำเร็จ: %s", type(exc).__name__)
+        return ""
+
+    seen = _by_vision(image)
+    if seen is not None:
+        return repair_clipped_years(repair_numeral_lookalikes(seen))
+
+    try:
+        import pytesseract
+    except ImportError:
+        _engine_missing("ไม่มีทั้ง ocrmac และ pytesseract")
+        return ""
+    try:
+        return pytesseract.image_to_string(image, lang="tha+eng")
+    except Exception as exc:  # noqa: BLE001
         if type(exc).__name__ == "TesseractNotFoundError":
             _engine_missing("ไม่พบโปรแกรม tesseract")
             return ""

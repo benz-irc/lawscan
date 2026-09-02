@@ -268,3 +268,75 @@ class TestTheWordsThe2569SheetStillCarried:
         row = Row(document="ทดสอบ")
         row.put("กฎหมายแม่", "พระราชบัญญัติการเลือกตัง พ.ศ. 2560", "llm")
         assert "เลือกตั้ง" in row.value("กฎหมายแม่")
+
+
+class TestNumeralsTheRecogniserSawAsLetters:
+    """``หน้า ด`` is a page number. ``ดำเนินการ`` is not.
+
+    macOS reads this corpus far better than Tesseract — every year the three
+    measured documents printed, against none — but it returns a Thai letter for
+    a numeral where the shapes collide. Counted over 250 first pages against
+    the operator's register: ``ด`` for ``๑`` 21 times, ``€`` for ``๔`` twice.
+    """
+
+    def test_a_lone_numeral_after_a_counting_word_is_restored(self):
+        from lawscan.ocr.thai_text import repair_numeral_lookalikes as fix
+
+        assert fix("หน้า ด") == "หน้า ๑"
+        assert fix("มาตรา ด วรรคหนึ่ง") == "มาตรา ๑ วรรคหนึ่ง"
+
+    def test_a_lookalike_inside_a_run_of_numerals_is_restored(self):
+        from lawscan.ocr.thai_text import repair_numeral_lookalikes as fix
+
+        assert fix("เล่ม ๑€๓ ตอนที่ ๔๗") == "เล่ม ๑๔๓ ตอนที่ ๔๗"
+        assert fix("๓o") == "๓๐"
+
+    def test_the_letter_is_left_alone_where_it_is_a_letter(self):
+        from lawscan.ocr.thai_text import repair_numeral_lookalikes as fix
+
+        assert fix("ดำเนินการตามข้อ ๕") == "ดำเนินการตามข้อ ๕"
+        assert fix("ประชาชนดี") == "ประชาชนดี"
+        assert fix("ข้อ ดังกล่าว") == "ข้อ ดังกล่าว"
+
+    def test_a_run_of_letters_with_no_numeral_is_not_a_number(self):
+        from lawscan.ocr.thai_text import repair_numeral_lookalikes as fix
+
+        assert fix("ดด") == "ดด"
+
+    def test_empty_text_survives(self):
+        from lawscan.ocr.thai_text import repair_numeral_lookalikes as fix
+
+        assert fix("") == ""
+
+
+class TestAYearTheSlashAteTheFrontOf:
+    """``ครั้งที่ ๓/๒๕๖๘`` comes back ``ครั้งที่ ๓/๕๖๘``.
+
+    44 of the 144 numbers missed over 128 pages of known text are this shape:
+    the separator swallows the leading ``๒``. Bounded to 2540–2570, which is
+    what a meeting or an order is ever numbered against — wider than that and
+    the repair turns the ratio ``๑/๕๐๐`` into a citation.
+    """
+
+    def test_the_leading_digit_comes_back(self):
+        from lawscan.ocr.thai_text import repair_clipped_years as fix
+
+        assert fix("ครั้งที่ ๓/๕๖๘") == "ครั้งที่ ๓/๒๕๖๘"
+        assert fix("ที่ ๙/๕๔๗") == "ที่ ๙/๒๕๔๗"
+
+    def test_arabic_digits_are_repaired_the_same_way(self):
+        from lawscan.ocr.thai_text import repair_clipped_years as fix
+
+        assert fix("ที่ 5/568") == "ที่ 5/2568"
+
+    def test_a_ratio_is_not_a_citation(self):
+        from lawscan.ocr.thai_text import repair_clipped_years as fix
+
+        assert fix("อัตรา ๑/๕๐๐") == "อัตรา ๑/๕๐๐"
+        assert fix("ส่วน ๑/๑๐๐") == "ส่วน ๑/๑๐๐"
+
+    def test_a_year_that_arrived_whole_is_untouched(self):
+        from lawscan.ocr.thai_text import repair_clipped_years as fix
+
+        assert fix("คำสั่งที่ ๓๑๓/๒๕๖๗") == "คำสั่งที่ ๓๑๓/๒๕๖๗"
+        assert fix("มาตรา ๒๓/๑") == "มาตรา ๒๓/๑"

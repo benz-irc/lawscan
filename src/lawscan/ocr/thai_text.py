@@ -596,3 +596,80 @@ def normalize_for_matching(text: str) -> str:
     text = re.sub(r"[^\w฀-๿]", "", text)
     return text
 
+
+
+#: A Thai letter the recogniser returns where a Thai numeral was printed. Both
+#: shapes are genuine confusions of the glyph, not of the language: ``ด`` and
+#: ``๑`` differ by the size of the loop, and a page number set in one character
+#: gives the recogniser nothing else to go on. Counted over the 250 first pages
+#: of the 2569 corpus against the operator's register: ``ด`` for ``๑`` 21 times,
+#: ``€`` for ``๔`` twice, ``o`` for ``๐`` once.
+_NUMERAL_LOOKALIKE = {"ด": "๑", "€": "๔", "o": "๐", "O": "๐"}
+
+#: A run of Thai numerals with one of the lookalikes among them, or a lone
+#: lookalike standing where a number belongs. Both need a numeral in view to
+#: fire: ``ด`` is a common letter and rewriting every one of them would ruin
+#: the Thai. The keyword form covers the lone case — ``หน้า ด`` is a page
+#: number and ``ดำเนินการ`` is not, so the letter must not be followed by more
+#: Thai.
+_NUMERAL_RUN = re.compile(
+    "[" + THAI_DIGITS + "".join(_NUMERAL_LOOKALIKE) + "]{2,}"
+)
+_LONE_NUMERAL = re.compile(
+    r"(เล่ม|ตอนที่|หน้า|ข้อ|มาตรา|ฉบับที่|พ\.ศ\.|ครั้งที่|ลำดับที่)(\s+)"
+    "([" + "".join(_NUMERAL_LOOKALIKE) + "])"
+    "(?![ก-ฮะ-๎])"
+)
+
+
+def repair_numeral_lookalikes(text: str) -> str:
+    """Thai letters the recogniser returned where numerals were printed.
+
+    Only where a numeral is already in view — inside a run that holds one, or
+    directly after a word that is always followed by a number. ``ด`` on its own
+    is one of the commonest letters in the language.
+    """
+    if not text:
+        return text
+
+    def whole(match: re.Match[str]) -> str:
+        run = match.group(0)
+        if not any(c in THAI_DIGITS for c in run):
+            return run
+        return "".join(_NUMERAL_LOOKALIKE.get(c, c) for c in run)
+
+    text = _NUMERAL_RUN.sub(whole, text)
+    return _LONE_NUMERAL.sub(
+        lambda m: m.group(1) + m.group(2) + _NUMERAL_LOOKALIKE[m.group(3)], text)
+
+
+#: A year that lost its leading digit to the slash in front of it. The
+#: recogniser reads ``ครั้งที่ ๓/๒๕๖๘`` as ``ครั้งที่ ๓/๕๖๘`` — the ``๒`` is
+#: swallowed by the separator. 44 of the 144 numbers missed over 128 pages of
+#: known text are this one shape, and another 18 are its neighbours.
+#:
+#: Bounded by what a reference of this kind actually cites. A meeting or an
+#: order is numbered against a recent year, and every one observed fell in
+#: 2540–2570. Widening it past that turns ``อัตรา ๑/๕๐๐`` — a ratio — into
+#: ``๑/๒๕๐๐``, which is the repair inventing a citation out of a fraction.
+_YEAR_FLOOR, _YEAR_CEILING = 2540, 2570
+_CLIPPED_YEAR = re.compile(r"(?<=/)([๐-๙]{3})(?![๐-๙])")
+_CLIPPED_YEAR_ARABIC = re.compile(r"(?<=/)(\d{3})(?!\d)")
+
+
+def _restored(digits: str, lead: str) -> str:
+    """``digits`` with ``lead`` in front, if that makes a year of this era."""
+    plain = digits.translate(_THAI_DIGIT_MAP) if lead == "๒" else digits
+    try:
+        year = int(("2" + plain).strip())
+    except ValueError:
+        return digits
+    return lead + digits if _YEAR_FLOOR <= year <= _YEAR_CEILING else digits
+
+
+def repair_clipped_years(text: str) -> str:
+    """Years the slash in front of them ate the first digit of."""
+    if not text:
+        return text
+    text = _CLIPPED_YEAR.sub(lambda m: _restored(m.group(1), "๒"), text)
+    return _CLIPPED_YEAR_ARABIC.sub(lambda m: _restored(m.group(1), "2"), text)
