@@ -202,3 +202,38 @@ def test_a_section_number_is_not_replaced_when_the_counts_disagree():
     ocred = "ข้อ oo ทดสอบ ข้อ om ทดสอบ ข้อ ow ทดสอบ"
     layer = "ข้อ ๑ ทดสอบระบบทำงำนตำมรำยกำรที่ประกำศ"
     assert _numerals_from_layer(ocred, layer) == ocred
+
+
+class TestWhenAFragmentIsWorthReadingAgain:
+    """Three faults the whole-line read makes, each fixed by a second look.
+
+    Measured on the pages they occur: ``เรื่องพิจารณาที่ /๒๕๖๘`` came back
+    ``๘/๒๕๖๘``, ``๑๐,๐๘๘๘๑`` came back ``๑๐,๐๘๘.๘๑``, and ``ด. เลขาธิการ``
+    came back ``๑. เลขาธิการ``.
+    """
+
+    def test_a_slash_with_nothing_in_front_of_it(self):
+        from lawscan.ocr.read import _LOST_NUMERATOR
+
+        assert _LOST_NUMERATOR.search("เรื่องพิจารณาที่ /๒๕๖๘")
+        assert not _LOST_NUMERATOR.search("เรื่องพิจารณาที่ ๘/๒๕๖๘")
+
+    def test_a_comma_group_with_the_point_missing(self):
+        from lawscan.ocr.read import _LOST_POINT
+
+        assert _LOST_POINT.search("๑๐,๐๘๘๘๑ บาท")
+        assert _LOST_POINT.search("๒,๒๕๖๔๔ กรัม")
+        assert not _LOST_POINT.search("๑๐,๐๘๘.๘๑ บาท")
+        assert not _LOST_POINT.search("๖๙,๑๑๗.๔๒ บาท")
+
+    def test_a_list_marker_read_as_a_letter(self):
+        from lawscan.ocr.read import _LIST_LOOKALIKE
+
+        assert _LIST_LOOKALIKE.search("ด. เลขาธิการคณะกรรมการกฤษฎีกา")
+        assert not _LIST_LOOKALIKE.search("๑. เลขาธิการคณะกรรมการกฤษฎีกา")
+        assert not _LIST_LOOKALIKE.search("ดำเนินการ. ต่อไป")
+
+    def test_a_plain_number_is_not_a_trigger(self):
+        from lawscan.ocr.read import _LOST_POINT
+
+        assert not _LOST_POINT.search("มาตรา ๒๗ และมาตรา ๓๑")

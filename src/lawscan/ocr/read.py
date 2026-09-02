@@ -538,12 +538,19 @@ def _by_vision(image: object) -> str | None:
 
     lines: list[str] = []
     for text, _, box in found:
-        if _LOST_NUMERATOR.search(text):
+        gap = (_LOST_NUMERATOR.search(text) or _LOST_POINT.search(text)
+               or _LIST_LOOKALIKE.search(text))
+        if gap:
             again = _reread(image, box)
-            # Only where reading it again actually supplied the digit. A second
-            # look that returns the same gap, or wanders off into the line
-            # beside it, is not an improvement.
-            if again and not _LOST_NUMERATOR.search(again) and "/" in again:
+            # Only where reading it again actually closed the gap. A second
+            # look that returns the same fault, or wanders off into the line
+            # beside it, is not an improvement — and the length guard keeps a
+            # crop that drifted onto a neighbour from replacing the line.
+            better = (again and not _LOST_NUMERATOR.search(again)
+                      and not _LOST_POINT.search(again)
+                      and not _LIST_LOOKALIKE.search(again)
+                      and 0.6 <= len(again) / max(1, len(text)) <= 1.6)
+            if better:
                 text = again
         lines.append(text)
     return "\n".join(lines)
@@ -556,6 +563,20 @@ def _by_vision(image: object) -> str | None:
 #: or meeting number, so unlike the year behind the slash there is nothing to
 #: infer it from. Reading that fragment again on its own recovers it.
 _LOST_NUMERATOR = re.compile(r"(?<![๐-๙\d])/[๐-๙\d]")
+
+#: A comma-grouped number with more than three digits behind the comma. Thai
+#: writes ``๑๐,๐๘๘.๘๑`` and the recogniser returns ``๑๐,๐๘๘๘๑`` — the decimal
+#: point goes and the digits close up, so a sum of ten thousand baht reads as
+#: a million. Sometimes a digit goes with it: ``๒,๒๑๕.๖๔๔`` came back
+#: ``๒,๒๕๖๔๔``. Neither can be repaired by rule — putting the point back three
+#: digits along would turn the second one into ๒,๒๕๖.๔๔, a number that was
+#: never printed. Reading the fragment again recovers both.
+_LOST_POINT = re.compile(r"[๐-๙\d],[๐-๙\d]{4,}")
+
+#: A list marker read as the letter it looks like. ``๑.`` opening a line comes
+#: back ``ด.``; the numeral repair leaves it alone, and correctly so — there is
+#: no numeral beside it to make the case, and ``ด`` is a common letter.
+_LIST_LOOKALIKE = re.compile(r"(?:^|\n)\s*[ดo]\s*\.\s")
 
 
 def _reread(image: object, box: list[float]) -> str:
